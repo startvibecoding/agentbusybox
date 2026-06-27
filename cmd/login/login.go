@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"unsafe"
 
 	"github.com/agentbusybox/pkg/applet"
 )
@@ -102,8 +103,69 @@ func runPasswd(args []string) int {
 }
 
 func runGetty(args []string) int {
-	fmt.Fprintf(os.Stderr, "getty: not supported\n")
-	return 1
+	if runtime.GOOS != "linux" {
+		fmt.Fprintf(os.Stderr, "getty: not supported\n")
+		return 1
+	}
+	if len(args) < 3 {
+		fmt.Fprintf(os.Stderr, "getty: usage: getty [OPTIONS] BAUD_RATE TTY [TERM]\n")
+		return 1
+	}
+
+	baudRate := args[1]
+	tty := args[2]
+	term := "linux"
+	if len(args) > 3 {
+		term = args[3]
+	}
+
+	// Open the TTY
+	f, err := os.OpenFile(tty, os.O_RDWR, 0)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "getty: %s: %v\n", tty, err)
+		return 1
+	}
+	defer f.Close()
+
+	// Set the TTY as stdin/stdout/stderr
+	syscall.Dup2(int(f.Fd()), 0)
+	syscall.Dup2(int(f.Fd()), 1)
+	syscall.Dup2(int(f.Fd()), 2)
+
+	// Set baud rate
+	var termios syscall.Termios
+	_, _, errno := syscall.Syscall6(syscall.SYS_IOCTL, f.Fd(),
+		0x5401, // TCGETS
+		uintptr(unsafe.Pointer(&termios)), 0, 0, 0)
+	if errno == 0 {
+		var baud uintptr
+		fmt.Sscanf(baudRate, "%d", &baud)
+		termios.Cflag = (termios.Cflag & ^uint32(0xf)) | uint32(baud)
+		syscall.Syscall6(syscall.SYS_IOCTL, f.Fd(),
+			0x5402, // TCSETS
+			uintptr(unsafe.Pointer(&termios)), 0, 0, 0)
+	}
+
+	_ = term
+
+	// Prompt for login
+	for {
+		fmt.Fprintf(f, "\nAgentBusyBox %s\n\n", tty)
+		fmt.Fprintf(f, "login: ")
+		reader := bufio.NewReader(f)
+		user, err := reader.ReadString('\n')
+		if err != nil {
+			return 1
+		}
+		user = strings.TrimSpace(user)
+		if user == "" {
+			continue
+		}
+		// Start shell
+		fmt.Fprintf(f, "login: starting shell for %s\n", user)
+		syscall.Exec("/bin/sh", []string{"sh"}, os.Environ())
+		return 0
+	}
 }
 
 func runCryptpw(args []string) int {

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -537,6 +538,8 @@ func runEnv(args []string) int {
 
 	if clearEnv {
 		os.Clearenv()
+		// Set a minimal PATH when env is cleared
+		os.Setenv("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
 	}
 
 	// Set any VAR=VALUE pairs before command
@@ -561,9 +564,19 @@ func runEnv(args []string) int {
 		return 0
 	}
 
-	// Run command - simplified, just print args
-	fmt.Fprintf(os.Stderr, "env: command execution not yet supported\n")
-	return 1
+	// Run command
+	cmd := exec.Command(args[j], args[j+1:]...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			return exitErr.ExitCode()
+		}
+		fmt.Fprintf(os.Stderr, "env: '%s': %v\n", args[j], err)
+		return 127
+	}
+	return 0
 }
 
 func init() {

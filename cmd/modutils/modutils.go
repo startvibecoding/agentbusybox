@@ -11,6 +11,8 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"syscall"
+	"unsafe"
 
 	"github.com/agentbusybox/pkg/applet"
 	"golang.org/x/sys/unix"
@@ -42,15 +44,16 @@ func runInsmod(args []string) int {
 		return 1
 	}
 
-	// Write module data to /dev/kmod or use init_module syscall
-	f, err := os.OpenFile("/dev/kmod", os.O_WRONLY, 0)
-	if err != nil {
-		// Try init_module syscall
-		fmt.Fprintf(os.Stderr, "insmod: cannot load module (requires root)\n")
+	// Try init_module syscall (requires root)
+	// On Linux, init_module takes the module data and length
+	_, _, errno := syscall.RawSyscall(175, // __NR_init_module
+		uintptr(unsafe.Pointer(&data[0])),
+		uintptr(len(data)),
+		0)
+	if errno != 0 {
+		fmt.Fprintf(os.Stderr, "insmod: %s: %v\n", module, errno)
 		return 1
 	}
-	defer f.Close()
-	_ = data
 	return 0
 }
 
@@ -87,10 +90,15 @@ func runRmmod(args []string) int {
 	}
 
 	module := args[1]
-	// Try delete_module syscall
-	_ = module
-	fmt.Fprintf(os.Stderr, "rmmod: cannot remove module (requires root)\n")
-	return 1
+	// delete_module syscall (requires root)
+	_, _, errno := syscall.RawSyscall(176, // __NR_delete_module
+		uintptr(unsafe.Pointer(&[]byte(module+"\x00")[0])),
+		0, 0)
+	if errno != 0 {
+		fmt.Fprintf(os.Stderr, "rmmod: %s: %v\n", module, errno)
+		return 1
+	}
+	return 0
 }
 
 func runModprobe(args []string) int {
@@ -105,7 +113,8 @@ func runModprobe(args []string) int {
 
 	showAll := false
 	remove := false
-	module := ""
+	quiet := false
+	modules := []string{}
 
 	for _, a := range args[1:] {
 		switch a {
@@ -113,6 +122,8 @@ func runModprobe(args []string) int {
 			showAll = true
 		case "-r", "--remove":
 			remove = true
+		case "-q", "--quiet":
+			quiet = true
 		case "-l": // list
 			data, err := os.ReadFile("/proc/modules")
 			if err != nil {
@@ -125,16 +136,80 @@ func runModprobe(args []string) int {
 				}
 			}
 			return 0
+		case "-v", "--verbose":
+			// verbose mode
 		default:
 			if !strings.HasPrefix(a, "-") {
-				module = a
+				modules = append(modules, a)
 			}
 		}
 	}
 	_ = showAll
-	_ = remove
-	_ = module
+
+	if len(modules) == 0 {
+		fmt.Fprintf(os.Stderr, "modprobe: missing module\n")
+		return 1
+	}
+
+	if remove {
+		// Remove modules in reverse order
+		for i := len(modules) - 1; i >= 0; i-- {
+			modName := modules[i]
+			_, _, errno := syscall.RawSyscall(176, // __NR_delete_module
+				uintptr(unsafe.Pointer(&[]byte(modName+"\x00")[0])),
+				0, 0)
+			if errno != 0 && !quiet {
+				fmt.Fprintf(os.Stderr, "modprobe: %s: %v\n", modName, errno)
+			}
+		}
+		return 0
+	}
+
+	// Load modules - find and load each
+	modRoot := "/lib/modules/" + kernelRelease()
+	for _, modName := range modules {
+		modPath := findModule(modRoot, modName)
+		if modPath == "" {
+			if !quiet {
+				fmt.Fprintf(os.Stderr, "modprobe: %s: not found\n", modName)
+			}
+			continue
+		}
+		data, err := os.ReadFile(modPath)
+		if err != nil {
+			if !quiet {
+				fmt.Fprintf(os.Stderr, "modprobe: %s: %v\n", modPath, err)
+			}
+			continue
+		}
+		_, _, errno := syscall.RawSyscall(175, // __NR_init_module
+			uintptr(unsafe.Pointer(&data[0])),
+			uintptr(len(data)),
+			0)
+		if errno != 0 && !quiet {
+			fmt.Fprintf(os.Stderr, "modprobe: %s: %v\n", modName, errno)
+		}
+	}
 	return 0
+}
+
+func findModule(modRoot, name string) string {
+	modName := strings.ReplaceAll(name, "-", "_")
+	var found string
+	filepath.WalkDir(modRoot, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		base := d.Name()
+		base = strings.TrimSuffix(base, ".gz")
+		base = strings.TrimSuffix(base, ".ko")
+		if strings.ReplaceAll(base, "-", "_") == modName {
+			found = path
+			return filepath.SkipAll
+		}
+		return nil
+	})
+	return found
 }
 
 func runModinfo(args []string) int {
@@ -148,22 +223,69 @@ func runModinfo(args []string) int {
 	}
 
 	module := args[1]
-	// Try /sys/module/<name>
-	modPath := fmt.Sprintf("/sys/module/%s", module)
+	modName := strings.ReplaceAll(module, "-", "_")
+
+	// Check if loaded
+	modPath := fmt.Sprintf("/sys/module/%s", modName)
 	info, err := os.Stat(modPath)
-	if err != nil || !info.IsDir() {
-		fmt.Fprintf(os.Stderr, "modinfo: module '%s' not found\n", module)
+	if err == nil && info.IsDir() {
+		// Module is loaded, read info from sysfs
+		fmt.Printf("filename:       %s\n", modPath)
+		fmt.Printf("license:        GPL\n")
+
+		if data, err := os.ReadFile(modPath + "/version"); err == nil {
+			fmt.Printf("version:        %s", string(data))
+		}
+		if data, err := os.ReadFile(modPath + "/srcversion"); err == nil {
+			fmt.Printf("srcversion:     %s", string(data))
+		}
+		if data, err := os.ReadFile(modPath + "/author"); err == nil {
+			fmt.Printf("author:         %s", string(data))
+		}
+		if data, err := os.ReadFile(modPath + "/description"); err == nil {
+			desc := strings.TrimSpace(string(data))
+			if desc != "" {
+				fmt.Printf("description:    %s\n", desc)
+			}
+		}
+		return 0
+	}
+
+	// Module not loaded, search in /lib/modules
+	modRoot := "/lib/modules/" + kernelRelease()
+	modPath = findModule(modRoot, module)
+	if modPath == "" {
+		fmt.Fprintf(os.Stderr, "modinfo: %s: not found\n", module)
 		return 1
 	}
 
-	fmt.Printf("filename:       %s/%s\n", modPath, module)
-	fmt.Printf("license:        GPL\n")
-
-	// Read version
-	if data, err := os.ReadFile(modPath + "/version"); err == nil {
-		fmt.Printf("version:        %s", string(data))
+	data, err := readModuleFile(modPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "modinfo: %s: %v\n", modPath, err)
+		return 1
 	}
 
+	fmt.Printf("filename:       %s\n", modPath)
+	for _, token := range extractModuleTokens(data) {
+		switch {
+		case strings.HasPrefix(token, "license="):
+			fmt.Printf("license:        %s\n", strings.TrimPrefix(token, "license="))
+		case strings.HasPrefix(token, "author="):
+			fmt.Printf("author:         %s\n", strings.TrimPrefix(token, "author="))
+		case strings.HasPrefix(token, "description="):
+			fmt.Printf("description:    %s\n", strings.TrimPrefix(token, "description="))
+		case strings.HasPrefix(token, "vermagic="):
+			fmt.Printf("vermagic:       %s\n", strings.TrimPrefix(token, "vermagic="))
+		case strings.HasPrefix(token, "depends="):
+			fmt.Printf("depends:        %s\n", strings.TrimPrefix(token, "depends="))
+		case strings.HasPrefix(token, "alias="):
+			fmt.Printf("alias:          %s\n", strings.TrimPrefix(token, "alias="))
+		case strings.HasPrefix(token, "parm="):
+			fmt.Printf("parm:           %s\n", strings.TrimPrefix(token, "parm="))
+		case strings.HasPrefix(token, "parmtype="):
+			fmt.Printf("parmtype:       %s\n", strings.TrimPrefix(token, "parmtype="))
+		}
+	}
 	return 0
 }
 

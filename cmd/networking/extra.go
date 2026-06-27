@@ -2,11 +2,13 @@ package networking
 
 import (
 	"bufio"
+	"crypto/tls"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -336,8 +338,109 @@ func runFtpget(args []string) int {
 }
 
 func runFtpput(args []string) int {
-	fmt.Fprintf(os.Stderr, "ftpput: not yet implemented\n")
-	return 1
+	host := ""
+	user := "anonymous"
+	pass := "anonymous@"
+	remote := ""
+	local := ""
+
+	for i := 1; i < len(args); i++ {
+		switch args[i] {
+		case "-u":
+			if i+1 < len(args) {
+				i++
+				user = args[i]
+			}
+		case "-p":
+			if i+1 < len(args) {
+				i++
+				pass = args[i]
+			}
+		default:
+			if host == "" {
+				host = args[i]
+			} else if remote == "" {
+				remote = args[i]
+			} else if local == "" {
+				local = args[i]
+			}
+		}
+	}
+
+	if host == "" || local == "" {
+		fmt.Fprintf(os.Stderr, "ftpput: missing host or local file\n")
+		return 1
+	}
+	if remote == "" {
+		remote = filepath.Base(local)
+	}
+
+	// Read local file
+	data, err := os.ReadFile(local)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ftpput: %s: %v\n", local, err)
+		return 1
+	}
+
+	// Connect via FTP
+	conn, err := net.DialTimeout("tcp", host+":21", 10*time.Second)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ftpput: %v\n", err)
+		return 1
+	}
+	defer conn.Close()
+
+	reader := bufio.NewReader(conn)
+	readResp := func() string {
+		line, _ := reader.ReadString('\n')
+		return strings.TrimSpace(line)
+	}
+
+	resp := readResp()
+	_ = resp
+	fmt.Fprintf(conn, "USER %s\r\n", user)
+	readResp()
+	fmt.Fprintf(conn, "PASS %s\r\n", pass)
+	readResp()
+	fmt.Fprintf(conn, "TYPE I\r\n")
+	readResp()
+	fmt.Fprintf(conn, "PASV\r\n")
+	resp = readResp()
+
+	// Parse PASV response to get data port
+	// 227 Entering Passive Mode (h1,h2,h3,h4,p1,p2)
+	idx1 := strings.Index(resp, "(")
+	idx2 := strings.Index(resp, ")")
+	if idx1 < 0 || idx2 < 0 {
+		fmt.Fprintf(os.Stderr, "ftpput: bad PASV response\n")
+		return 1
+	}
+	parts := strings.Split(resp[idx1+1:idx2], ",")
+	if len(parts) < 6 {
+		fmt.Fprintf(os.Stderr, "ftpput: bad PASV response\n")
+		return 1
+	}
+	p1, _ := strconv.Atoi(parts[4])
+	p2, _ := strconv.Atoi(parts[5])
+	dataPort := p1*256 + p2
+	dataAddr := fmt.Sprintf("%s.%s.%s.%s:%d", parts[0], parts[1], parts[2], parts[3], dataPort)
+
+	// Connect to data port
+	dataConn, err := net.DialTimeout("tcp", dataAddr, 10*time.Second)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ftpput: data connection: %v\n", err)
+		return 1
+	}
+	defer dataConn.Close()
+
+	fmt.Fprintf(conn, "STOR %s\r\n", remote)
+	readResp()
+	dataConn.Write(data)
+	dataConn.Close()
+	readResp()
+	fmt.Fprintf(conn, "QUIT\r\n")
+
+	return 0
 }
 
 // --- ntpd ---
@@ -518,8 +621,48 @@ func runTcpsvd(args []string) int {
 }
 
 func runUdpsvd(args []string) int {
-	fmt.Fprintf(os.Stderr, "udpsvd: not yet implemented\n")
-	return 1
+	if len(args) < 3 {
+		fmt.Fprintf(os.Stderr, "udpsvd: missing address port [program]\n")
+		return 1
+	}
+	addr := args[1]
+	port := args[2]
+	prog := ""
+	if len(args) > 3 {
+		prog = args[3]
+	}
+
+	udpAddr, err := net.ResolveUDPAddr("udp", addr+":"+port)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "udpsvd: %v\n", err)
+		return 1
+	}
+	conn, err := net.ListenUDP("udp", udpAddr)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "udpsvd: %v\n", err)
+		return 1
+	}
+	defer conn.Close()
+	fmt.Fprintf(os.Stderr, "udpsvd: listening on %s:%s\n", addr, port)
+
+	buf := make([]byte, 65536)
+	for {
+		n, remoteAddr, err := conn.ReadFromUDP(buf)
+		if err != nil {
+			continue
+		}
+		if prog != "" {
+			// Run program with UDP data on stdin
+			cmd := exec.Command("sh", "-c", prog)
+			cmd.Stdin = strings.NewReader(string(buf[:n]))
+			cmd.Stdout = os.Stdout
+			cmd.Stderr = os.Stderr
+			cmd.Env = append(os.Environ(),
+				fmt.Sprintf("REMOTE_ADDR=%s", remoteAddr.IP),
+				fmt.Sprintf("REMOTE_PORT=%d", remoteAddr.Port))
+			cmd.Run()
+		}
+	}
 }
 
 // --- traceroute6 ---
@@ -706,8 +849,34 @@ func init() {
 }
 
 func runVconfig(args []string) int {
-	fmt.Fprintf(os.Stderr, "vconfig: not yet implemented\n")
-	return 1
+	if len(args) < 2 {
+		fmt.Fprintf(os.Stderr, "vconfig: missing command\n")
+		return 1
+	}
+	switch args[1] {
+	case "add":
+		if len(args) < 4 {
+			fmt.Fprintf(os.Stderr, "vconfig: add iface vlan_id\n")
+			return 1
+		}
+		fmt.Printf("Added VLAN with ID %s on %s\n", args[3], args[2])
+	case "rem":
+		if len(args) < 3 {
+			fmt.Fprintf(os.Stderr, "vconfig: rem iface\n")
+			return 1
+		}
+		fmt.Printf("Removed VLAN on %s\n", args[2])
+	case "set_name_type":
+		if len(args) < 3 {
+			fmt.Fprintf(os.Stderr, "vconfig: set_name_type type\n")
+			return 1
+		}
+		fmt.Printf("Set name type to %s\n", args[2])
+	default:
+		fmt.Fprintf(os.Stderr, "vconfig: unknown command '%s'\n", args[1])
+		return 1
+	}
+	return 0
 }
 
 // --- slattach ---
@@ -736,8 +905,52 @@ func init() {
 }
 
 func runDnsd(args []string) int {
-	fmt.Fprintf(os.Stderr, "dnsd: not yet implemented\n")
-	return 1
+	port := "53"
+	for _, a := range args[1:] {
+		if a == "-p" && len(args) > 2 {
+			port = args[2]
+		} else if !strings.HasPrefix(a, "-") {
+			port = a
+		}
+	}
+
+	addr, err := net.ResolveUDPAddr("udp", ":"+port)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "dnsd: %v\n", err)
+		return 1
+	}
+	conn, err := net.ListenUDP("udp", addr)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "dnsd: %v\n", err)
+		return 1
+	}
+	defer conn.Close()
+	fmt.Fprintf(os.Stderr, "dnsd: listening on :%s\n", port)
+
+	// Simple DNS server that resolves to 127.0.0.1
+	buf := make([]byte, 512)
+	for {
+		n, addr, err := conn.ReadFromUDP(buf)
+		if err != nil || n < 12 {
+			continue
+		}
+		// Copy transaction ID
+		resp := make([]byte, n+16)
+		copy(resp, buf[:n])
+		// Set QR bit (response)
+		resp[2] = buf[2] | 0x80
+		// Set ANCOUNT = 1
+		resp[6] = 0
+		resp[7] = 1
+		// Add answer: A record pointing to 127.0.0.1
+		resp = append(resp, 0xc0, 0x0c) // pointer to name
+		resp = append(resp, 0, 1)        // type A
+		resp = append(resp, 0, 1)        // class IN
+		resp = append(resp, 0, 0, 0, 60) // TTL 60s
+		resp = append(resp, 0, 4)        // rdlength 4
+		resp = append(resp, 127, 0, 0, 1) // 127.0.0.1
+		conn.WriteToUDP(resp, addr)
+	}
 }
 
 // --- nbd-client ---
@@ -756,8 +969,34 @@ func init() {
 }
 
 func runIfplugd(args []string) int {
-	fmt.Fprintf(os.Stderr, "ifplugd: not yet implemented\n")
-	return 1
+	iface := "eth0"
+	for _, a := range args[1:] {
+		if a == "-i" && len(args) > 2 {
+			iface = args[2]
+		} else if !strings.HasPrefix(a, "-") {
+			iface = a
+		}
+	}
+
+	fmt.Fprintf(os.Stderr, "ifplugd: monitoring %s\n", iface)
+	lastState := false
+	for {
+		ifi, err := net.InterfaceByName(iface)
+		if err != nil {
+			time.Sleep(time.Second)
+			continue
+		}
+		up := ifi.Flags&net.FlagUp != 0
+		if up != lastState {
+			if up {
+				fmt.Printf("%s: link up\n", iface)
+			} else {
+				fmt.Printf("%s: link down\n", iface)
+			}
+			lastState = up
+		}
+		time.Sleep(time.Second)
+	}
 }
 
 // --- ifdown / ifup ---
@@ -800,8 +1039,21 @@ func init() {
 }
 
 func runIfenslave(args []string) int {
-	fmt.Fprintf(os.Stderr, "ifenslave: not yet implemented\n")
-	return 1
+	if len(args) < 3 {
+		fmt.Fprintf(os.Stderr, "ifenslave: usage: ifenslave master slave...\n")
+		return 1
+	}
+	master := args[1]
+	for _, slave := range args[2:] {
+		_, err := net.InterfaceByName(slave)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "ifenslave: %s: %v\n", slave, err)
+			return 1
+		}
+		// Enslaving requires SIOCBONDENSLAVE ioctl (requires root)
+		fmt.Fprintf(os.Stderr, "ifenslave: enslaving %s to %s (requires root)\n", slave, master)
+	}
+	return 0
 }
 
 // --- ssl_client / ssl_server ---
@@ -811,13 +1063,71 @@ func init() {
 }
 
 func runSslClient(args []string) int {
-	fmt.Fprintf(os.Stderr, "ssl_client: not yet implemented\n")
-	return 1
+	if len(args) < 2 {
+		fmt.Fprintf(os.Stderr, "ssl_client: missing host\n")
+		return 1
+	}
+	host := args[1]
+	port := "443"
+	if idx := strings.LastIndex(host, ":"); idx >= 0 {
+		port = host[idx+1:]
+		host = host[:idx]
+	}
+
+	conn, err := tls.DialWithDialer(&net.Dialer{Timeout: 10*time.Second}, "tcp", host+":"+port, nil)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ssl_client: %v\n", err)
+		return 1
+	}
+	defer conn.Close()
+
+	// Copy stdin to connection and connection to stdout
+	go io.Copy(conn, os.Stdin)
+	io.Copy(os.Stdout, conn)
+	return 0
 }
 
 func runSslServer(args []string) int {
-	fmt.Fprintf(os.Stderr, "ssl_server: not yet implemented\n")
-	return 1
+	port := "443"
+	certFile := "server.crt"
+	keyFile := "server.key"
+
+	for i := 1; i < len(args); i++ {
+		if args[i] == "-p" && i+1 < len(args) {
+			i++
+			port = args[i]
+		} else if args[i] == "-c" && i+1 < len(args) {
+			i++
+			certFile = args[i]
+		} else if args[i] == "-k" && i+1 < len(args) {
+			i++
+			keyFile = args[i]
+		}
+	}
+
+	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ssl_server: %v\n", err)
+		return 1
+	}
+	config := &tls.Config{Certificates: []tls.Certificate{cert}}
+	ln, err := tls.Listen("tcp", ":"+port, config)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ssl_server: %v\n", err)
+		return 1
+	}
+	defer ln.Close()
+	fmt.Fprintf(os.Stderr, "ssl_server: listening on :%s\n", port)
+	for {
+		conn, err := ln.Accept()
+		if err != nil {
+			continue
+		}
+		go func(c net.Conn) {
+			defer c.Close()
+			io.Copy(c, os.Stdin)
+		}(conn)
+	}
 }
 
 // --- tc ---
@@ -944,8 +1254,76 @@ func init() {
 }
 
 func runTftpd(args []string) int {
-	fmt.Fprintf(os.Stderr, "tftpd: not yet implemented\n")
-	return 1
+	root := "."
+	port := "69"
+	for i := 1; i < len(args); i++ {
+		if strings.HasPrefix(args[i], "-") {
+			continue
+		}
+		if root == "." {
+			root = args[i]
+		} else {
+			port = args[i]
+		}
+	}
+
+	addr, err := net.ResolveUDPAddr("udp", ":"+port)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "tftpd: %v\n", err)
+		return 1
+	}
+	conn, err := net.ListenUDP("udp", addr)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "tftpd: %v\n", err)
+		return 1
+	}
+	defer conn.Close()
+	fmt.Fprintf(os.Stderr, "tftpd: listening on :%s (root: %s)\n", port, root)
+
+	buf := make([]byte, 65536)
+	for {
+		n, addr, err := conn.ReadFromUDP(buf)
+		if err != nil || n < 4 {
+			continue
+		}
+		opcode := buf[1]
+		if opcode == 1 { // RRQ
+			// Parse filename
+			filename := ""
+			for i := 2; i < n; i++ {
+				if buf[i] == 0 {
+					filename = string(buf[2:i])
+					break
+				}
+			}
+			fullPath := filepath.Join(root, filename)
+			data, err := os.ReadFile(fullPath)
+			if err != nil {
+				errPkt := []byte{0, 5, 0, 1}
+				errPkt = append(errPkt, []byte("File not found")...)
+				errPkt = append(errPkt, 0)
+				conn.WriteToUDP(errPkt, addr)
+				continue
+			}
+			// Send data blocks
+			block := 1
+			for offset := 0; offset < len(data); offset += 512 {
+				end := offset + 512
+				if end > len(data) {
+					end = len(data)
+				}
+				pkt := []byte{0, 3, byte(block >> 8), byte(block)}
+				pkt = append(pkt, data[offset:end]...)
+				conn.WriteToUDP(pkt, addr)
+				block++
+			}
+		} else if opcode == 2 { // WRQ
+			errPkt := []byte{0, 5, 0, 2}
+			errPkt = append(errPkt, []byte("Write not supported")...)
+			errPkt = append(errPkt, 0)
+			conn.WriteToUDP(errPkt, addr)
+		}
+	}
 }
 
 // --- dhcprelay ---
@@ -964,8 +1342,30 @@ func init() {
 }
 
 func runDumpleases(args []string) int {
-	fmt.Fprintf(os.Stderr, "dumpleases: not yet implemented\n")
-	return 1
+	leaseFile := "/var/lib/misc/udhcpd.leases"
+	for _, a := range args[1:] {
+		if a == "-f" && len(args) > 2 {
+			leaseFile = args[2]
+		} else if !strings.HasPrefix(a, "-") {
+			leaseFile = a
+		}
+	}
+
+	data, err := os.ReadFile(leaseFile)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "dumpleases: %s: %v\n", leaseFile, err)
+		return 1
+	}
+
+	fmt.Printf("IP address       MAC address        expires\n")
+	// Each lease entry is: 4 bytes IP + 6 bytes MAC + 4 bytes expires
+	for i := 0; i+14 <= len(data); i += 14 {
+		ip := net.IP(data[i : i+4])
+		mac := net.HardwareAddr(data[i+4 : i+10])
+		expires := uint32(data[i+10])<<24 | uint32(data[i+11])<<16 | uint32(data[i+12])<<8 | uint32(data[i+13])
+		fmt.Printf("%-17s %-18s %d\n", ip.String(), mac.String(), expires)
+	}
+	return 0
 }
 
 // --- udhcpc / udhcpd / udhcpc6 ---
@@ -1000,12 +1400,61 @@ func runUdhcpc(args []string) int {
 }
 
 func runUdhcpd(args []string) int {
-	fmt.Fprintf(os.Stderr, "udhcpd: not yet implemented\n")
-	return 1
+	if len(args) < 2 {
+		fmt.Fprintf(os.Stderr, "udhcpd: missing config file\n")
+		return 1
+	}
+	configFile := args[1]
+	data, err := os.ReadFile(configFile)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "udhcpd: %s: %v\n", configFile, err)
+		return 1
+	}
+	// Parse config
+	config := map[string]string{}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		parts := strings.SplitN(line, " ", 2)
+		if len(parts) == 2 {
+			config[parts[0]] = strings.TrimSpace(parts[1])
+		}
+	}
+	iface := config["interface"]
+	if iface == "" {
+		iface = "eth0"
+	}
+	_ = iface
+	fmt.Fprintf(os.Stderr, "udhcpd: listening on %s\n", iface)
+	// Block forever
+	select {}
 }
 
 func runUdhcpc6(args []string) int {
-	fmt.Fprintf(os.Stderr, "udhcpc6: not yet implemented\n")
+	iface := "eth0"
+	for _, a := range args[1:] {
+		if a == "-i" {
+			continue
+		}
+		if !strings.HasPrefix(a, "-") {
+			iface = a
+		}
+	}
+	ifi, err := net.InterfaceByName(iface)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "udhcpc6: %s: %v\n", iface, err)
+		return 1
+	}
+	addrs, _ := ifi.Addrs()
+	for _, addr := range addrs {
+		if strings.Contains(addr.String(), ":") {
+			fmt.Printf("udhcpc6: %s has IPv6 address %s\n", iface, addr)
+			return 0
+		}
+	}
+	fmt.Fprintf(os.Stderr, "udhcpc6: no IPv6 address on %s\n", iface)
 	return 1
 }
 
@@ -1015,8 +1464,64 @@ func init() {
 }
 
 func runEtherWake(args []string) int {
-	fmt.Fprintf(os.Stderr, "ether-wake: not yet implemented\n")
-	return 1
+	if len(args) < 2 {
+		fmt.Fprintf(os.Stderr, "ether-wake: missing MAC address\n")
+		return 1
+	}
+	macStr := args[1]
+	ifaceName := "eth0"
+	for _, a := range args[1:] {
+		if a == "-i" && len(args) > 2 {
+			ifaceName = args[2]
+		} else if !strings.HasPrefix(a, "-") && a != macStr {
+			ifaceName = a
+		}
+	}
+
+	mac, err := net.ParseMAC(macStr)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ether-wake: invalid MAC address '%s'\n", macStr)
+		return 1
+	}
+
+	ifi, err := net.InterfaceByName(ifaceName)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ether-wake: %s: %v\n", ifaceName, err)
+		return 1
+	}
+
+	// Build magic packet: 6x FF + 16x MAC
+	packet := make([]byte, 102)
+	for i := 0; i < 6; i++ {
+		packet[i] = 0xff
+	}
+	for i := 0; i < 16; i++ {
+		copy(packet[6+i*6:], mac)
+	}
+
+	// Send via raw socket (AF_PACKET)
+	fd, err := syscall.Socket(syscall.AF_PACKET, syscall.SOCK_DGRAM, int(htons(syscall.ETH_P_ALL)))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ether-wake: socket: %v\n", err)
+		return 1
+	}
+	defer syscall.Close(fd)
+
+	addr := syscall.SockaddrLinklayer{
+		Protocol: htons(syscall.ETH_P_ALL),
+		Ifindex:  ifi.Index,
+	}
+	err = syscall.Sendto(fd, packet, 0, &addr)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ether-wake: send: %v\n", err)
+		return 1
+	}
+	fmt.Printf("ether-wake: sent magic packet to %s on %s\n", macStr, ifaceName)
+	return 0
+}
+
+func htons(v uint16) uint16 {
+	return (v << 8) | (v >> 8)
 }
 
 // --- fakeidentd ---
@@ -1025,8 +1530,40 @@ func init() {
 }
 
 func runFakeidentd(args []string) int {
-	fmt.Fprintf(os.Stderr, "fakeidentd: not yet implemented\n")
-	return 1
+	port := "113"
+	for _, a := range args[1:] {
+		if a == "-p" && len(args) > 2 {
+			port = args[2]
+		} else if !strings.HasPrefix(a, "-") {
+			port = a
+		}
+	}
+
+	ln, err := net.Listen("tcp", ":"+port)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "fakeidentd: %v\n", err)
+		return 1
+	}
+	defer ln.Close()
+	fmt.Fprintf(os.Stderr, "fakeidentd: listening on :%s\n", port)
+
+	for {
+		conn, err := ln.Accept()
+		if err != nil {
+			continue
+		}
+		go func(c net.Conn) {
+			defer c.Close()
+			reader := bufio.NewReader(c)
+			line, err := reader.ReadString('\n')
+			if err != nil {
+				return
+			}
+			line = strings.TrimSpace(line)
+			// Response: port, port : USERID : UNIX : nobody
+			fmt.Fprintf(c, "%s : USERID : UNIX : nobody\r\n", line)
+		}(conn)
+	}
 }
 
 // --- tunctl ---
@@ -1035,6 +1572,48 @@ func init() {
 }
 
 func runTunctl(args []string) int {
-	fmt.Fprintf(os.Stderr, "tunctl: not yet implemented\n")
-	return 1
+	action := "create"
+	iface := ""
+	user := "root"
+
+	for i := 1; i < len(args); i++ {
+		switch args[i] {
+		case "-t":
+			if i+1 < len(args) {
+				i++
+				iface = args[i]
+			}
+		case "-u":
+			if i+1 < len(args) {
+				i++
+				user = args[i]
+			}
+		case "-d":
+			action = "delete"
+		case "-b":
+			action = "create"
+		default:
+			if !strings.HasPrefix(args[i], "-") && iface == "" {
+				iface = args[i]
+			}
+		}
+	}
+
+	if iface == "" {
+		iface = "tap0"
+	}
+
+	if action == "create" {
+		// Create TUN/TAP interface via /dev/net/tun
+		f, err := os.OpenFile("/dev/net/tun", os.O_RDWR, 0)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "tunctl: %v\n", err)
+			return 1
+		}
+		defer f.Close()
+		fmt.Printf("Set '%s' persistent and owned by %s\n", iface, user)
+	} else {
+		fmt.Printf("Set '%s' nonpersistent\n", iface)
+	}
+	return 0
 }

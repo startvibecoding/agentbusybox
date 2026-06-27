@@ -314,9 +314,47 @@ func runOpenvt(args []string) int {
 		fmt.Fprintf(os.Stderr, "openvt: missing command\n")
 		return 1
 	}
-	_ = vt
-	_ = cmdArgs
-	fmt.Fprintf(os.Stderr, "openvt: not yet implemented in pure Go\n")
+
+	// Find a free VT if vt == 0
+	if vt == 0 {
+		for n := 1; n <= 63; n++ {
+			dev := fmt.Sprintf("/dev/tty%d", n)
+			if _, err := os.Stat(dev); os.IsNotExist(err) {
+				vt = n
+				break
+			}
+		}
+		if vt == 0 {
+			vt = 1
+		}
+	}
+
+	// Open the VT
+	dev := fmt.Sprintf("/dev/tty%d", vt)
+	f, err := os.OpenFile(dev, os.O_RDWR, 0)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "openvt: %v\n", err)
+		return 1
+	}
+	defer f.Close()
+
+	// Activate the VT
+	if err := unix.IoctlSetInt(int(f.Fd()), vtActivate, vt); err != nil {
+		fmt.Fprintf(os.Stderr, "openvt: %v\n", err)
+		return 1
+	}
+
+	// Run command on this VT
+	argv := append([]string{cmd}, cmdArgs...)
+	proc, err := os.StartProcess(cmd, argv, &os.ProcAttr{
+		Env:   os.Environ(),
+		Files: []*os.File{f, f, f},
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "openvt: %v\n", err)
+		return 1
+	}
+	proc.Wait()
 	return 0
 }
 

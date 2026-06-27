@@ -10,6 +10,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unsafe"
 
 	"github.com/agentbusybox/pkg/applet"
 )
@@ -277,8 +278,70 @@ func runNice(args []string) int {
 }
 
 func runRenice(args []string) int {
-	fmt.Fprintf(os.Stderr, "renice: not yet implemented\n")
-	return 1
+	priority := 0
+	pids := []int{}
+	isAbsolute := false
+
+	i := 1
+	for i < len(args) {
+		a := args[i]
+		if a == "-n" && i+1 < len(args) {
+			i++
+			fmt.Sscanf(args[i], "%d", &priority)
+		} else if a == "-p" {
+			// PID mode (default)
+		} else if a == "-g" {
+			// Process group mode
+		} else if a == "-u" {
+			// User mode
+		} else if !strings.HasPrefix(a, "-") {
+			pid, err := strconv.Atoi(a)
+			if err == nil {
+				pids = append(pids, pid)
+			}
+		} else {
+			// +N or -N
+			if strings.HasPrefix(a, "+") {
+				fmt.Sscanf(a[1:], "%d", &priority)
+			} else {
+				fmt.Sscanf(a, "%d", &priority)
+				isAbsolute = true
+			}
+		}
+		i++
+	}
+
+	if len(pids) == 0 {
+		fmt.Fprintf(os.Stderr, "renice: missing pid\n")
+		return 1
+	}
+
+	exitCode := 0
+	for _, pid := range pids {
+		if isAbsolute {
+			if err := syscall.Setpriority(syscall.PRIO_PROCESS, pid, priority); err != nil {
+				fmt.Fprintf(os.Stderr, "renice: %d: %v\n", pid, err)
+				exitCode = 1
+			} else {
+				fmt.Printf("%d: set priority %d\n", pid, priority)
+			}
+		} else {
+			current, err := syscall.Getpriority(syscall.PRIO_PROCESS, pid)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "renice: %d: %v\n", pid, err)
+				exitCode = 1
+				continue
+			}
+			newPrio := current + priority
+			if err := syscall.Setpriority(syscall.PRIO_PROCESS, pid, newPrio); err != nil {
+				fmt.Fprintf(os.Stderr, "renice: %d: %v\n", pid, err)
+				exitCode = 1
+			} else {
+				fmt.Printf("%d: set priority %d\n", pid, newPrio)
+			}
+		}
+	}
+	return exitCode
 }
 
 func runKillall(args []string) int {
@@ -315,40 +378,327 @@ func runKillall(args []string) int {
 }
 
 func runDmesg(args []string) int {
-	if runtime.GOOS == "linux" {
-		data, err := os.ReadFile("/var/log/dmesg")
+	clear := false
+	raw := false
+	level := -1
+	size := 0
+
+	for i := 1; i < len(args); i++ {
+		switch args[i] {
+		case "-c":
+			clear = true
+		case "-r":
+			raw = true
+		case "-n":
+			if i+1 < len(args) {
+				i++
+				fmt.Sscanf(args[i], "%d", &level)
+			}
+		case "-s":
+			if i+1 < len(args) {
+				i++
+				fmt.Sscanf(args[i], "%d", &size)
+			}
+		}
+	}
+
+	if runtime.GOOS != "linux" {
+		fmt.Fprintf(os.Stderr, "dmesg: not supported on this platform\n")
+		return 1
+	}
+
+	// Set console log level if requested
+	if level >= 0 {
+		// Write level to /dev/kmsg
+		if f, err := os.OpenFile("/dev/kmsg", os.O_WRONLY, 0); err == nil {
+			defer f.Close()
+			fmt.Fprintf(f, "<%s> ", fmt.Sprintf("%d", level))
+		} else {
+			fmt.Fprintf(os.Stderr, "dmesg: %v", err)
+			return 1
+		}
+		return 0
+	}
+
+	// Try klogctl first via /dev/kmsg, then /proc/kmsg, then /var/log/dmesg
+	var data []byte
+	var err error
+
+	if size == 0 {
+		size = 16 * 1024
+	}
+	if size > 16*1024*1024 {
+		size = 16 * 1024 * 1024
+	}
+
+	// Read from /dev/kmsg (preferred)
+	f, err := os.Open("/dev/kmsg")
+	if err == nil {
+		defer f.Close()
+		buf := make([]byte, size)
+		n, readErr := f.Read(buf)
+		if n > 0 {
+			data = buf[:n]
+		}
+		if clear {
+			// Seek to end to clear
+			f.Seek(0, 2)
+		}
+		_ = readErr
+	}
+
+	// Fallback to /proc/kmsg
+	if len(data) == 0 {
+		data, err = os.ReadFile("/proc/kmsg")
 		if err != nil {
-			data, err = os.ReadFile("/proc/kmsg")
+			// Fallback to /var/log/dmesg
+			data, err = os.ReadFile("/var/log/dmesg")
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "dmesg: %v\n", err)
 				return 1
 			}
 		}
-		os.Stdout.Write(data)
-		return 0
 	}
-	fmt.Fprintf(os.Stderr, "dmesg: not supported on this platform\n")
-	return 1
+
+	if raw {
+		os.Stdout.Write(data)
+	} else {
+		// Pretty print: strip syslog level prefix <N>
+		lines := strings.Split(string(data), "\n")
+		for _, line := range lines {
+			if len(line) > 0 && line[0] == '<' {
+				idx := strings.Index(line, ">")
+				if idx >= 0 && idx < 4 {
+					line = line[idx+1:]
+				}
+			}
+			fmt.Println(line)
+		}
+	}
+
+	return 0
 }
 
 func runEject(args []string) int {
-	fmt.Fprintf(os.Stderr, "eject: not supported\n")
-	return 1
+	device := ""
+	trayClose := false
+	for _, a := range args[1:] {
+		if a == "-t" {
+			trayClose = true
+		} else if !strings.HasPrefix(a, "-") {
+			device = a
+		}
+	}
+	if device == "" {
+		device = "/dev/cdrom"
+	}
+	if runtime.GOOS != "linux" {
+		fmt.Fprintf(os.Stderr, "eject: not supported\n")
+		return 1
+	}
+	f, err := os.Open(device)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "eject: %s: %v\n", device, err)
+		return 1
+	}
+	defer f.Close()
+	// CDROMEJECT = 0x5309, CDROMCLOSETRAY = 0x5319
+	const cdromEject = 0x5309
+	const cdromCloseTray = 0x5319
+	if trayClose {
+		_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, f.Fd(), cdromCloseTray, 0)
+		if errno != 0 {
+			fmt.Fprintf(os.Stderr, "eject: %v\n", errno)
+			return 1
+		}
+	} else {
+		_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, f.Fd(), cdromEject, 0)
+		if errno != 0 {
+			fmt.Fprintf(os.Stderr, "eject: %v\n", errno)
+			return 1
+		}
+	}
+	return 0
 }
 
 func runMknod(args []string) int {
-	fmt.Fprintf(os.Stderr, "mknod: not supported\n")
-	return 1
+	mode := uint32(0)
+	major := 0
+	minor := 0
+	name := ""
+
+	i := 1
+	for i < len(args) {
+		a := args[i]
+		if a == "-m" && i+1 < len(args) {
+			i++
+			// Parse mode as octal
+			fmt.Sscanf(args[i], "%o", &mode)
+		} else if !strings.HasPrefix(a, "-") {
+			if name == "" {
+				name = a
+			} else if mode == 0 {
+				// First positional arg after name is the type
+				switch a {
+				case "b":
+					mode = syscall.S_IFBLK | 0660
+				case "c", "u":
+					mode = syscall.S_IFCHR | 0660
+				case "p":
+					mode = syscall.S_IFIFO | 0660
+				}
+			} else {
+				// Major and minor
+				if major == 0 {
+					fmt.Sscanf(a, "%d", &major)
+				} else {
+					fmt.Sscanf(a, "%d", &minor)
+				}
+			}
+		}
+		i++
+	}
+
+	if name == "" {
+		fmt.Fprintf(os.Stderr, "mknod: missing operand\n")
+		return 1
+	}
+	if mode == 0 {
+		fmt.Fprintf(os.Stderr, "mknod: missing type\n")
+		return 1
+	}
+
+	dev := int(((major & 0xfff) << 8) | (minor & 0xff) | ((minor & 0xffffff00) << 12))
+	if err := syscall.Mknod(name, mode, dev); err != nil {
+		fmt.Fprintf(os.Stderr, "mknod: %s: %v\n", name, err)
+		return 1
+	}
+	return 0
 }
 
 func runMkfifo(args []string) int {
-	fmt.Fprintf(os.Stderr, "mkfifo: not supported on this platform\n")
-	return 1
+	mode := uint32(0666)
+	names := []string{}
+
+	for i := 1; i < len(args); i++ {
+		if args[i] == "-m" && i+1 < len(args) {
+			i++
+			fmt.Sscanf(args[i], "%o", &mode)
+		} else if !strings.HasPrefix(args[i], "-") {
+			names = append(names, args[i])
+		}
+	}
+
+	if len(names) == 0 {
+		fmt.Fprintf(os.Stderr, "mkfifo: missing operand\n")
+		return 1
+	}
+
+	exitCode := 0
+	for _, name := range names {
+		if err := syscall.Mkfifo(name, mode); err != nil {
+			fmt.Fprintf(os.Stderr, "mkfifo: %s: %v\n", name, err)
+			exitCode = 1
+		}
+	}
+	return exitCode
 }
 
 func runStty(args []string) int {
-	fmt.Fprintf(os.Stderr, "stty: not yet implemented\n")
+	showAll := false
+	showReadable := false
+
+	for _, a := range args[1:] {
+		if a == "-a" || a == "--all" {
+			showAll = true
+		} else if a == "-g" || a == "--save" {
+			showReadable = true
+		}
+	}
+
+	if runtime.GOOS != "linux" {
+		fmt.Fprintf(os.Stderr, "stty: not supported on this platform\n")
+		return 1
+	}
+
+	f, err := os.Open("/dev/tty")
+	if err != nil {
+		f = os.Stdin
+	}
+	defer func() {
+		if f != os.Stdin {
+			f.Close()
+		}
+	}()
+
+	// Get terminal attributes via ioctl
+	var termios syscall.Termios
+	_, _, errno := syscall.Syscall6(syscall.SYS_IOCTL, f.Fd(),
+		0x5401, // TCGETS
+		uintptr(unsafe.Pointer(&termios)), 0, 0, 0)
+	if errno != 0 {
+		fmt.Fprintf(os.Stderr, "stty: %v\n", errno)
+		return 1
+	}
+
+	if showReadable {
+		// Output in stty-readable format
+		fmt.Printf("%x:%x:%x:%x\n",
+			termios.Iflag, termios.Oflag, termios.Cflag, termios.Lflag)
+		return 0
+	}
+
+	if showAll {
+		fmt.Printf("speed %d baud; line = 0;\n", getBaudRate(termios))
+		fmt.Printf("min = %d; time = %d;\n", termios.Cc[syscall.VMIN], termios.Cc[syscall.VTIME])
+		fmt.Printf("-brkint -imaxbel\n")
+		fmt.Printf("-icanon -echo -echoe -echok\n")
+		return 0
+	}
+
+	// Default output: show changed settings
+	fmt.Printf("speed %d baud; line = 0;\n", getBaudRate(termios))
 	return 0
+}
+
+func getBaudRate(t syscall.Termios) int {
+	baud := t.Cflag & 0xf
+	switch baud {
+	case 0:
+		return 0
+	case 1:
+		return 50
+	case 2:
+		return 75
+	case 3:
+		return 110
+	case 4:
+		return 134
+	case 5:
+		return 150
+	case 6:
+		return 200
+	case 7:
+		return 300
+	case 8:
+		return 600
+	case 9:
+		return 1200
+	case 10:
+		return 1800
+	case 11:
+		return 2400
+	case 12:
+		return 4800
+	case 13:
+		return 9600
+	case 14:
+		return 19200
+	case 15:
+		return 38400
+	default:
+		return 9600
+	}
 }
 
 func runTty(args []string) int {

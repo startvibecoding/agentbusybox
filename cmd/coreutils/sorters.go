@@ -4,9 +4,14 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
+	"os/user"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/agentbusybox/pkg/applet"
 )
@@ -791,38 +796,157 @@ func factorNum(n int64) {
 }
 
 func runTsort(args []string) int {
-	data, err := io.ReadAll(os.Stdin)
-	if err != nil {
+	var r io.Reader
+	files := []string{}
+	i := 1
+	for ; i < len(args); i++ {
+		a := args[i]
+		if a == "--" {
+			i++
+			break
+		}
+		if strings.HasPrefix(a, "-") {
+			continue
+		}
+		files = append(files, a)
+	}
+	files = append(files, args[i:]...)
+	if len(files) == 0 {
+		r = os.Stdin
+	} else if len(files) == 1 {
+		if files[0] == "-" {
+			r = os.Stdin
+		} else {
+			f, err := os.Open(files[0])
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "tsort: %s: %v\n", files[0], err)
+				return 1
+			}
+			defer f.Close()
+			r = f
+		}
+	} else {
+		fmt.Fprintf(os.Stderr, "tsort: extra operand\n")
 		return 1
 	}
 
-	graph := make(map[string][]string)
-	inDegree := make(map[string]int)
-	nodes := make(map[string]bool)
-
-	for range strings.Fields(string(data)) {
-		// pairs of words
+	data, err := io.ReadAll(r)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "tsort: read error: %v\n", err)
+		return 1
 	}
-	_ = graph
-	_ = inDegree
-	_ = nodes
 
-	fmt.Fprintf(os.Stderr, "tsort: not fully implemented\n")
-	return 1
+	// Build graph from word pairs
+	words := strings.Fields(string(data))
+	if len(words)%2 != 0 {
+		fmt.Fprintf(os.Stderr, "tsort: odd input\n")
+		return 1
+	}
+
+	// Adjacency list and in-degree count
+	adj := make(map[string][]string)
+	inDegree := make(map[string]int)
+	hasNode := make(map[string]bool)
+
+	for i := 0; i < len(words); i += 2 {
+		a, b := words[i], words[i+1]
+		if a == b {
+			continue
+		}
+		hasNode[a] = true
+		hasNode[b] = true
+		adj[a] = append(adj[a], b)
+		inDegree[b]++
+		if _, ok := inDegree[a]; !ok {
+			inDegree[a] = 0
+		}
+	}
+
+	// Kahn's algorithm
+	var queue []string
+	for node := range hasNode {
+		if inDegree[node] == 0 {
+			queue = append(queue, node)
+		}
+	}
+	sort.Strings(queue) // deterministic order
+
+	var result []string
+	for len(queue) > 0 {
+		node := queue[0]
+		queue = queue[1:]
+		result = append(result, node)
+
+		for _, neighbor := range adj[node] {
+			inDegree[neighbor]--
+			if inDegree[neighbor] == 0 {
+				queue = append(queue, neighbor)
+				sort.Strings(queue)
+			}
+		}
+	}
+
+	// Check for cycles
+	if len(result) != len(hasNode) {
+		fmt.Fprintf(os.Stderr, "tsort: input contains a loop\n")
+		return 1
+	}
+
+	for _, node := range result {
+		fmt.Println(node)
+	}
+	return 0
 }
 
 func runOd(args []string) int {
-	radix := "o" // o=octal, x=hex, d=decimal
-	bytes := 0
+	radix := "o" // o=octal, x=hex, d=decimal, n=none
+	addrFmt := "o" // -A: o=octal, x=hex, d=decimal, n=none
+	typeSpec := "o2" // -t type
+	skipBytes := 0   // -j
+	maxBytes := -1   // -N
 	files := []string{}
 
-	for _, a := range args[1:] {
-		if strings.HasPrefix(a, "-t") {
-			radix = a[2:]
+	for i := 1; i < len(args); i++ {
+		a := args[i]
+		if strings.HasPrefix(a, "-t") && len(a) > 2 {
+			typeSpec = a[2:]
 			continue
 		}
-		if a == "-A" {
+		if a == "-t" && i+1 < len(args) {
+			i++
+			typeSpec = args[i]
 			continue
+		}
+		if strings.HasPrefix(a, "-A") && len(a) > 2 {
+			addrFmt = a[2:]
+			continue
+		}
+		if a == "-A" && i+1 < len(args) {
+			i++
+			addrFmt = args[i]
+			continue
+		}
+		if strings.HasPrefix(a, "-j") && len(a) > 2 {
+			fmt.Sscanf(a[2:], "%d", &skipBytes)
+			continue
+		}
+		if a == "-j" && i+1 < len(args) {
+			i++
+			fmt.Sscanf(args[i], "%d", &skipBytes)
+			continue
+		}
+		if strings.HasPrefix(a, "-N") && len(a) > 2 {
+			fmt.Sscanf(a[2:], "%d", &maxBytes)
+			continue
+		}
+		if a == "-N" && i+1 < len(args) {
+			i++
+			fmt.Sscanf(args[i], "%d", &maxBytes)
+			continue
+		}
+		if a == "--" {
+			files = append(files, args[i+1:]...)
+			break
 		}
 		if !strings.HasPrefix(a, "-") {
 			files = append(files, a)
@@ -831,6 +955,19 @@ func runOd(args []string) int {
 	if len(files) == 0 {
 		files = []string{"-"}
 	}
+
+	// Parse type spec (e.g., "o2", "x1", "d4", "x", "a")
+	typeChar := 'o'
+	typeSize := 2
+	if len(typeSpec) > 0 {
+		typeChar = rune(typeSpec[0])
+		if typeChar == 'a' || typeChar == 'c' {
+			typeSize = 1
+		} else if len(typeSpec) > 1 {
+			fmt.Sscanf(typeSpec[1:], "%d", &typeSize)
+		}
+	}
+	_ = radix
 
 	var allData []byte
 	for _, fname := range files {
@@ -842,37 +979,110 @@ func runOd(args []string) int {
 			data, err = os.ReadFile(fname)
 		}
 		if err != nil {
+			fmt.Fprintf(os.Stderr, "od: %s: %v\n", fname, err)
 			return 1
 		}
 		allData = append(allData, data...)
 	}
-	_ = bytes
 
-	addr := 0
+	// Apply skip
+	if skipBytes > 0 && skipBytes < len(allData) {
+		allData = allData[skipBytes:]
+	} else if skipBytes >= len(allData) {
+		allData = nil
+	}
+
+	// Apply max bytes
+	if maxBytes >= 0 && maxBytes < len(allData) {
+		allData = allData[:maxBytes]
+	}
+
+	addr := skipBytes
 	for i := 0; i < len(allData); i += 16 {
 		end := i + 16
 		if end > len(allData) {
 			end = len(allData)
 		}
-		fmt.Printf("%07o", addr)
-		for j := i; j < end; j += 2 {
-			if j+1 < end {
-				switch radix {
-				case "x":
-					fmt.Printf(" %04x", uint16(allData[j])|uint16(allData[j+1])<<8)
-				case "d":
-					fmt.Printf(" %5d", uint16(allData[j])|uint16(allData[j+1])<<8)
-				default:
-					fmt.Printf(" %06o", uint16(allData[j])|uint16(allData[j+1])<<8)
+
+		// Print address
+		switch addrFmt {
+		case "x":
+			fmt.Printf("%07x", addr)
+		case "d":
+			fmt.Printf("%07d", addr)
+		case "n":
+			// no address
+		default: // "o"
+			fmt.Printf("%07o", addr)
+		}
+
+		// Print data
+		for j := i; j < end; j += typeSize {
+			if typeChar == 'a' {
+				// ASCII character names
+				c := allData[j]
+				if c < 128 {
+					names := []string{"nul", "soh", "stx", "etx", "eot", "enq", "ack", "bel",
+						"bs", "ht", "nl", "vt", "np", "cr", "so", "si",
+						"dle", "dc1", "dc2", "dc3", "dc4", "nak", "syn", "etb",
+						"can", "em", "sub", "esc", "fs", "gs", "rs", "us", "sp"}
+					if int(c) < len(names) {
+						fmt.Printf(" %3s", names[c])
+					} else if c == 127 {
+						fmt.Printf(" del")
+					} else {
+						fmt.Printf(" %3c", c)
+					}
+				} else {
+					fmt.Printf(" %3d", c)
+				}
+			} else if typeChar == 'c' {
+				// Character
+				c := allData[j]
+				if c >= 32 && c < 127 {
+					fmt.Printf(" %3c", c)
+				} else {
+					fmt.Printf(" %3o", c)
 				}
 			} else {
-				switch radix {
-				case "x":
-					fmt.Printf(" %04x", allData[j])
-				case "d":
-					fmt.Printf(" %5d", allData[j])
-				default:
-					fmt.Printf(" %06o", allData[j])
+				switch typeSize {
+				case 1:
+					switch typeChar {
+					case 'x':
+						fmt.Printf(" %02x", allData[j])
+					case 'd':
+						fmt.Printf(" %3d", allData[j])
+					default:
+						fmt.Printf(" %03o", allData[j])
+					}
+				case 2:
+					var v uint16
+					if j+1 < end {
+						v = uint16(allData[j]) | uint16(allData[j+1])<<8
+					} else {
+						v = uint16(allData[j])
+					}
+					switch typeChar {
+					case 'x':
+						fmt.Printf(" %04x", v)
+					case 'd':
+						fmt.Printf(" %5d", v)
+					default:
+						fmt.Printf(" %06o", v)
+					}
+				case 4:
+					var v uint32
+					for k := 0; k < 4 && j+k < end; k++ {
+						v |= uint32(allData[j+k]) << (8 * k)
+					}
+					switch typeChar {
+					case 'x':
+						fmt.Printf(" %08x", v)
+					case 'd':
+						fmt.Printf(" %10d", v)
+					default:
+						fmt.Printf(" %011o", v)
+					}
 				}
 			}
 		}
@@ -946,11 +1156,55 @@ func runUname(args []string) int {
 	return 0
 }
 
-func getKernelName() string    { return "Linux" }
-func getKernelRelease() string { return "6.1.0" }
-func getKernelVersion() string { return "#1 SMP" }
-func getMachine() string       { return "x86_64" }
-func getOSName() string        { return "GNU/Linux" }
+func getKernelName() string {
+	var uts syscall.Utsname
+	if err := syscall.Uname(&uts); err == nil {
+		return utsToString(uts.Sysname)
+	}
+	return "Linux"
+}
+
+func getKernelRelease() string {
+	var uts syscall.Utsname
+	if err := syscall.Uname(&uts); err == nil {
+		return utsToString(uts.Release)
+	}
+	return "unknown"
+}
+
+func getKernelVersion() string {
+	var uts syscall.Utsname
+	if err := syscall.Uname(&uts); err == nil {
+		return utsToString(uts.Version)
+	}
+	return "unknown"
+}
+
+func getMachine() string {
+	var uts syscall.Utsname
+	if err := syscall.Uname(&uts); err == nil {
+		return utsToString(uts.Machine)
+	}
+	return runtime.GOARCH
+}
+
+func getOSName() string {
+	if runtime.GOOS == "linux" {
+		return "GNU/Linux"
+	}
+	return runtime.GOOS
+}
+
+func utsToString(buf [65]int8) string {
+	var b strings.Builder
+	for _, c := range buf {
+		if c == 0 {
+			break
+		}
+		b.WriteByte(byte(c))
+	}
+	return b.String()
+}
 
 func init() {
 	applet.Register(&applet.Applet{Name: "id", Short: "Print user/group IDs", Func: runId})
@@ -976,14 +1230,21 @@ func runId(args []string) int {
 
 	uid := os.Getuid()
 	gid := os.Getgid()
-	user := os.Getenv("USER")
-	if user == "" {
-		user = os.Getenv("USERNAME")
-	}
-	group := "users"
+	user := lookupUserName(uid)
+	group := lookupGroupName(gid)
 
 	if !showUID && !showGID && !showGroups {
-		fmt.Printf("uid=%d(%s) gid=%d(%s)\n", uid, user, gid, group)
+		// Show supplementary groups too
+		groups, err := os.Getgroups()
+		if err == nil && len(groups) > 0 {
+			groupStrs := make([]string, len(groups))
+			for i, g := range groups {
+				groupStrs[i] = fmt.Sprintf("%d(%s)", g, lookupGroupName(g))
+			}
+			fmt.Printf("uid=%d(%s) gid=%d(%s) groups=%s\n", uid, user, gid, group, strings.Join(groupStrs, ","))
+		} else {
+			fmt.Printf("uid=%d(%s) gid=%d(%s)\n", uid, user, gid, group)
+		}
 		return 0
 	}
 
@@ -1007,13 +1268,69 @@ func runId(args []string) int {
 		}
 	}
 	if showGroups {
+		groups, err := os.Getgroups()
+		if err != nil {
+			groups = []int{gid}
+		}
 		if showName {
-			fmt.Println(group)
+			names := make([]string, len(groups))
+			for i, g := range groups {
+				names[i] = lookupGroupName(g)
+			}
+			fmt.Println(strings.Join(names, " "))
 		} else {
-			fmt.Println(gid)
+			nums := make([]string, len(groups))
+			for i, g := range groups {
+				nums[i] = fmt.Sprintf("%d", g)
+			}
+			fmt.Println(strings.Join(nums, " "))
 		}
 	}
 	return 0
+}
+
+func lookupUserName(uid int) string {
+	u, err := user.LookupId(fmt.Sprintf("%d", uid))
+	if err == nil {
+		return u.Username
+	}
+	// Fallback: try /etc/passwd
+	data, err := os.ReadFile("/etc/passwd")
+	if err == nil {
+		for _, line := range strings.Split(string(data), "\n") {
+			fields := strings.Split(line, ":")
+			if len(fields) >= 3 {
+				var id int
+				fmt.Sscanf(fields[2], "%d", &id)
+				if id == uid {
+					return fields[0]
+				}
+			}
+		}
+	}
+	return fmt.Sprintf("%d", uid)
+}
+
+func lookupGroupName(gid int) string {
+	g, err := user.LookupGroupId(fmt.Sprintf("%d", gid))
+	if err == nil {
+		return g.Name
+	}
+	// Fallback: try /etc/group
+	data, err := os.ReadFile("/etc/group")
+	if err == nil {
+		for _, line := range strings.Split(string(data), "\n") {
+			fields := strings.Split(line, ":")
+			if len(fields) >= 3 {
+				var id int
+				fmt.Sscanf(fields[2], "%d", &id)
+				if id == gid {
+					return fields[0]
+				}
+			}
+		}
+	}
+	return fmt.Sprintf("%d", gid)
 }
 
 func init() {
@@ -1135,7 +1452,13 @@ func init() {
 
 func runInstall(args []string) int {
 	mode := os.FileMode(0755)
-	dir := ""
+	owner := ""
+	group := ""
+	dirMode := false   // -d
+	mkdirLead := false // -D
+	preserve := false  // -p
+	strip := false     // -s
+	targetDir := ""   // -t DIR
 	files := []string{}
 
 	i := 1
@@ -1145,22 +1468,68 @@ func runInstall(args []string) int {
 			fmt.Sscanf(a[2:], "%o", &mode)
 			continue
 		}
-		if a == "-d" {
-			dir = "create"
+		if a == "-m" && i+1 < len(args) {
+			i++
+			fmt.Sscanf(args[i], "%o", &mode)
 			continue
 		}
-		if strings.HasPrefix(a, "-d") && len(a) > 2 {
-			dir = a[2:]
+		if a == "-d" {
+			dirMode = true
 			continue
+		}
+		if a == "-D" {
+			mkdirLead = true
+			continue
+		}
+		if a == "-p" || a == "--preserve-timestamps" {
+			preserve = true
+			continue
+		}
+		if a == "-s" || a == "--strip" {
+			strip = true
+			continue
+		}
+		if (a == "-o" || a == "--owner") && i+1 < len(args) {
+			i++
+			owner = args[i]
+			continue
+		}
+		if (a == "-g" || a == "--group") && i+1 < len(args) {
+			i++
+			group = args[i]
+			continue
+		}
+		if (a == "-t" || a == "--target-directory") && i+1 < len(args) {
+			i++
+			targetDir = args[i]
+			continue
+		}
+		if a == "--" {
+			i++
+			break
 		}
 		if !strings.HasPrefix(a, "-") {
 			files = append(files, a)
 		}
 	}
+	files = append(files, args[i:]...)
 
-	if dir != "" {
+	_ = strip // strip not implemented in pure Go
+	_ = preserve
+
+	// Handle -t DIR
+	if targetDir != "" {
+		files = append(files, targetDir)
+	}
+
+	// -d: create directories
+	if dirMode {
 		for _, d := range files {
-			os.MkdirAll(d, mode)
+			if err := os.MkdirAll(d, mode); err != nil {
+				fmt.Fprintf(os.Stderr, "install: cannot create directory '%s': %v\n", d, err)
+				return 1
+			}
+			chownPath(d, owner, group)
 		}
 		return 0
 	}
@@ -1184,14 +1553,47 @@ func runInstall(args []string) int {
 	for _, src := range sources {
 		dst := dest
 		if destIsDir {
-			dst = strings.Join([]string{dest, filepath.Base(src)}, string(os.PathSeparator))
+			dst = filepath.Join(dest, filepath.Base(src))
 		}
+
+		// -D: create leading directories
+		if mkdirLead {
+			if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
+				fmt.Fprintf(os.Stderr, "install: cannot create directory: %v\n", err)
+				return 1
+			}
+		}
+
+		// Copy file
 		if err := copyFile(src, dst, mode, true, false, false); err != nil {
 			fmt.Fprintf(os.Stderr, "install: %v\n", err)
 			return 1
 		}
+
+		// Set ownership
+		chownPath(dst, owner, group)
+
+		// Set permissions
+		os.Chmod(dst, mode)
 	}
 	return 0
+}
+
+func chownPath(path, owner, group string) {
+	uid, gid := -1, -1
+	if owner != "" {
+		if u, err := user.Lookup(owner); err == nil {
+			fmt.Sscanf(u.Uid, "%d", &uid)
+		}
+	}
+	if group != "" {
+		if g, err := user.LookupGroup(group); err == nil {
+			fmt.Sscanf(g.Gid, "%d", &gid)
+		}
+	}
+	if uid != -1 || gid != -1 {
+		os.Chown(path, uid, gid)
+	}
 }
 
 func runChroot(args []string) int {
@@ -1201,18 +1603,32 @@ func runChroot(args []string) int {
 	}
 	newRoot := args[1]
 	command := "/bin/sh"
-	commandArgs := []string{}
+	commandArgs := []string{command}
 	if len(args) > 2 {
 		command = args[2]
 		commandArgs = args[2:]
 	}
 
-	if err := os.Chdir(newRoot); err != nil {
-		fmt.Fprintf(os.Stderr, "chroot: cannot chdir to %s: %v\n", newRoot, err)
+	if err := syscall.Chroot(newRoot); err != nil {
+		fmt.Fprintf(os.Stderr, "chroot: cannot change root to %s: %v\n", newRoot, err)
 		return 1
 	}
-	_ = command
-	_ = commandArgs
+	if err := os.Chdir("/"); err != nil {
+		fmt.Fprintf(os.Stderr, "chroot: cannot chdir to /: %v\n", err)
+		return 1
+	}
+
+	cmd := exec.Command(command, commandArgs[1:]...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			return exitErr.ExitCode()
+		}
+		fmt.Fprintf(os.Stderr, "chroot: cannot execute '%s': %v\n", command, err)
+		return 126
+	}
 	return 0
 }
 
@@ -1336,6 +1752,102 @@ func wrapText(text string, width int) string {
 }
 
 func runPr(args []string) int {
-	fmt.Fprintf(os.Stderr, "pr: not yet implemented\n")
-	return 1
+	headers := true
+	columns := 1
+	pageLen := 66
+	lineNums := false
+	files := []string{}
+
+	for i := 1; i < len(args); i++ {
+		a := args[i]
+		if a == "-h" && i+1 < len(args) {
+			i++
+			continue
+		}
+		if a == "-l" && i+1 < len(args) {
+			i++
+			fmt.Sscanf(args[i], "%d", &pageLen)
+			continue
+		}
+		if strings.HasPrefix(a, "-l") && len(a) > 2 {
+			fmt.Sscanf(a[2:], "%d", &pageLen)
+			continue
+		}
+		if strings.HasPrefix(a, "-w") && len(a) > 2 {
+			fmt.Sscanf(a[2:], "%d", &columns)
+			continue
+		}
+		if a == "-n" {
+			lineNums = true
+			continue
+		}
+		if a == "-t" {
+			headers = false
+			continue
+		}
+		if a == "--" {
+			i++
+			files = append(files, args[i:]...)
+			break
+		}
+		if !strings.HasPrefix(a, "-") {
+			files = append(files, a)
+		}
+	}
+
+	if len(files) == 0 {
+		files = []string{"-"}
+	}
+
+	var allLines []string
+	for _, fname := range files {
+		var data []byte
+		var err error
+		if fname == "-" {
+			data, err = io.ReadAll(os.Stdin)
+		} else {
+			data, err = os.ReadFile(fname)
+		}
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "pr: %s: %v\n", fname, err)
+			return 1
+		}
+		lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+		allLines = append(allLines, lines...)
+	}
+
+	if pageLen <= 0 {
+		pageLen = 66
+	}
+	height := pageLen - 5 // header + footer = 5 lines
+	if height <= 0 {
+		height = 61
+	}
+
+	page := 1
+	for i := 0; i < len(allLines); i += height {
+		end := i + height
+		if end > len(allLines) {
+			end = len(allLines)
+		}
+
+		if headers {
+			fmt.Println()
+			fmt.Printf("%s\t\t%s\n\n", files[0], time.Now().Format("Jan _2 15:04 2006"))
+		}
+
+		for j := i; j < end; j++ {
+			if lineNums {
+				fmt.Printf("%6d\t", j+1)
+			}
+			fmt.Println(allLines[j])
+		}
+
+		if headers {
+			fmt.Println()
+			fmt.Printf("\f Page %d\n", page)
+		}
+		page++
+	}
+	return 0
 }

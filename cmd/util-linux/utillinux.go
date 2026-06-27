@@ -37,7 +37,6 @@ func init() {
 	applet.Register(&applet.Applet{Name: "more", Short: "File perusal filter", Func: runMore})
 	applet.Register(&applet.Applet{Name: "hexdump", Short: "Dump files in hex", Func: runHexdump})
 	applet.Register(&applet.Applet{Name: "hd", Short: "Dump files in hex", Func: runHexdump})
-	applet.Register(&applet.Applet{Name: "renice", Short: "Alter priority of running processes", Func: runRenice})
 	applet.Register(&applet.Applet{Name: "chrt", Short: "Manipulate real-time attributes", Func: runChrt})
 	applet.Register(&applet.Applet{Name: "taskset", Short: "Set or retrieve a process CPU affinity", Func: runTaskset})
 	applet.Register(&applet.Applet{Name: "nsenter", Short: "Run program with namespaces of other processes", Func: runNsenter})
@@ -1099,35 +1098,6 @@ func runHexdump(args []string) int {
 
 func runXxd(args []string) int {
 	return runHexdump(args)
-}
-
-func runRenice(args []string) int {
-	if len(args) < 3 {
-		fmt.Fprintf(os.Stderr, "renice: missing priority or pid\n")
-		return 1
-	}
-	priority, err := strconv.Atoi(args[1])
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "renice: invalid priority '%s'\n", args[1])
-		return 1
-	}
-	exitCode := 0
-	for _, pidArg := range args[2:] {
-		if strings.HasPrefix(pidArg, "-") {
-			continue
-		}
-		pid, err := strconv.Atoi(pidArg)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "renice: invalid pid '%s'\n", pidArg)
-			exitCode = 1
-			continue
-		}
-		if err := syscall.Setpriority(syscall.PRIO_PROCESS, pid, priority); err != nil {
-			fmt.Fprintf(os.Stderr, "renice: %d: %v\n", pid, err)
-			exitCode = 1
-		}
-	}
-	return exitCode
 }
 
 func runChrt(args []string) int {

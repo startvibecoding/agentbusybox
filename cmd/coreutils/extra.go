@@ -13,6 +13,7 @@ import (
 	"math"
 	"os"
 	"os/user"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -730,12 +731,30 @@ func runExpr(args []string) int {
 			fmt.Println("0")
 			return 1
 		case ":":
-			// regex match (simplified: substring match)
-			if strings.Contains(left, right) {
-				fmt.Println(right)
+			// regex match using POSIX expr semantics
+			// Convert POSIX \( \) grouping to Go regex ( ) grouping
+			pattern := right
+			pattern = strings.ReplaceAll(pattern, "\\(", "(")
+			pattern = strings.ReplaceAll(pattern, "\\)", ")")
+			if !strings.HasPrefix(pattern, "^") {
+				pattern = "^" + pattern
+			}
+			re, err := regexp.Compile(pattern)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "expr: invalid regex: %v\n", err)
+				return 2
+			}
+			match := re.FindString(left)
+			if len(match) > 0 {
+				submatch := re.FindStringSubmatch(left)
+				if len(submatch) > 1 {
+					fmt.Println(submatch[1])
+				} else {
+					fmt.Println(len(match))
+				}
 				return 0
 			}
-			fmt.Println("0")
+			fmt.Println("")
 			return 1
 		}
 	}
@@ -800,19 +819,103 @@ func init() {
 	applet.Register(&applet.Applet{Name: "who", Short: "Show who is logged on", Func: runWho})
 }
 
+// utmpRecord represents a Linux utmp entry (384 bytes)
+type utmpRecord struct {
+	Type   int16
+	Pid    int32
+	Line   [32]byte
+	Id     [4]byte
+	User   [32]byte
+	Host   [256]byte
+	Exit   struct {
+		Termination int16
+		Exit        int16
+	}
+	Session int32
+	Time    struct {
+		Sec  int32
+		Usec int32
+	}
+	AddrV6 [16]byte
+	Unused [20]byte
+}
+
+const (
+	utmpType_USER_PROCESS = 7
+)
+
 func runWho(args []string) int {
-	u, err := user.Current()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "who: %v\n", err)
-		return 1
+	showAll := false
+	showHeader := false
+	for _, a := range args[1:] {
+		if a == "-a" {
+			showAll = true
+		}
+		if a == "-H" {
+			showHeader = true
+		}
 	}
-	hostname, _ := os.Hostname()
-	tty := "/dev/tty1"
-	if t := os.Getenv("TTY"); t != "" {
-		tty = t
+
+	if showHeader || showAll {
+		fmt.Println("USER		TTY		LOGIN@\t\t IDLE  PID  COMMENT")
 	}
-	fmt.Printf("%-10s %-12s %s (%s)\n", u.Username, tty, time.Now().Format("2006-01-02 15:04"), hostname)
+
+	// Try to read utmp
+	records, err := readUtmp()
+	if err != nil || len(records) == 0 {
+		// Fallback: show current user
+		u, err2 := user.Current()
+		if err2 != nil {
+			fmt.Fprintf(os.Stderr, "who: %v\n", err2)
+			return 1
+		}
+		tty := "tty1"
+		if t := os.Getenv("TTY"); t != "" {
+			tty = t
+		}
+		fmt.Printf("%-10s %-12s %s\n", u.Username, tty, time.Now().Format("2006-01-02 15:04"))
+		return 0
+	}
+
+	for _, r := range records {
+		if r.Type == utmpType_USER_PROCESS {
+			userStr := cstrToString(r.User[:])
+			lineStr := cstrToString(r.Line[:])
+			loginTime := time.Unix(int64(r.Time.Sec), 0)
+			fmt.Printf("%-10s %-12s %s\n", userStr, lineStr, loginTime.Format("Jan _2 15:04"))
+		}
+	}
 	return 0
+}
+
+func readUtmp() ([]utmpRecord, error) {
+	data, err := os.ReadFile("/var/run/utmp")
+	if err != nil {
+		return nil, err
+	}
+	var records []utmpRecord
+	size := 384 // sizeof(struct utmp) on Linux
+	for i := 0; i+size <= len(data); i += size {
+		var r utmpRecord
+		// Parse the binary record manually
+		r.Type = int16(data[i]) | int16(data[i+1])<<8
+		r.Pid = int32(data[i+4]) | int32(data[i+5])<<8 | int32(data[i+6])<<16 | int32(data[i+7])<<24
+		copy(r.Line[:], data[i+8:i+40])
+		copy(r.User[:], data[i+44:i+76])
+		copy(r.Host[:], data[i+76:i+332])
+		r.Time.Sec = int32(data[i+340]) | int32(data[i+341])<<8 | int32(data[i+342])<<16 | int32(data[i+343])<<24
+		records = append(records, r)
+	}
+	return records, nil
+}
+
+func cstrToString(b []byte) string {
+	for i, c := range b {
+		if c == 0 {
+			return string(b[:i])
+		}
+	}
+	return string(b)
 }
 
 // --- w ---
@@ -821,15 +924,69 @@ func init() {
 }
 
 func runW(args []string) int {
-	u, err := user.Current()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "w: %v\n", err)
-		return 1
+	noHeader := false
+	for _, a := range args[1:] {
+		if a == "-h" {
+			noHeader = true
+		}
 	}
-	hostname, _ := os.Hostname()
-	fmt.Printf(" %s up 0 days,  0:00,  1 user,  load average: 0.00, 0.00, 0.00\n", time.Now().Format("15:04:05"))
-	fmt.Printf("%-10s %-8s %-14s %s (%s)\n", u.Username, "tty1", time.Now().Format("15:04"), "-", hostname)
+
+	// Show uptime header
+	if !noHeader {
+		uptimeSec, loadAvg := readUptimeInfo()
+		days := uptimeSec / 86400
+		hours := (uptimeSec % 86400) / 3600
+		mins := (uptimeSec % 3600) / 60
+		fmt.Printf(" %s up %d days, %d:%02d, load average: %.2f, %.2f, %.2f\n",
+			time.Now().Format("15:04:05"), days, hours, mins,
+			loadAvg[0], loadAvg[1], loadAvg[2])
+		fmt.Println("USER	TTY	LOGIN@		IDLE	WHAT")
+	}
+
+	records, err := readUtmp()
+	if err != nil || len(records) == 0 {
+		u, err2 := user.Current()
+		if err2 != nil {
+			fmt.Fprintf(os.Stderr, "w: %v\n", err2)
+			return 1
+		}
+		tty := "tty1"
+		if t := os.Getenv("TTY"); t != "" {
+			tty = t
+		}
+		fmt.Printf("%-10s %-8s %-14s %s\n", u.Username, tty, time.Now().Format("Jan _2 15:04"), "-")
+		return 0
+	}
+
+	for _, r := range records {
+		if r.Type == utmpType_USER_PROCESS {
+			userStr := cstrToString(r.User[:])
+			lineStr := cstrToString(r.Line[:])
+			loginTime := time.Unix(int64(r.Time.Sec), 0)
+			idle := "-"
+			fmt.Printf("%-10s %-8s %-14s %s\n", userStr, lineStr, loginTime.Format("Jan _2 15:04"), idle)
+		}
+	}
 	return 0
+}
+
+func readUptimeInfo() (int64, [3]float64) {
+	var uptime int64
+	var loadAvg [3]float64
+
+	// Read uptime
+	data, err := os.ReadFile("/proc/uptime")
+	if err == nil {
+		fmt.Sscanf(string(data), "%d", &uptime)
+	}
+
+	// Read load average
+	data2, err2 := os.ReadFile("/proc/loadavg")
+	if err2 == nil {
+		fmt.Sscanf(string(data2), "%f %f %f", &loadAvg[0], &loadAvg[1], &loadAvg[2])
+	}
+
+	return uptime, loadAvg
 }
 
 // --- uudecode ---

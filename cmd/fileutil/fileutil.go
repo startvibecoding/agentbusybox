@@ -7,21 +7,23 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"github.com/agentbusybox/pkg/applet"
 	"golang.org/x/sys/unix"
 )
 
+// find is implemented in find_enhanced.go
+
 func init() {
-	applet.Register(&applet.Applet{Name: "find", Short: "Search for files in a directory hierarchy", Func: runFind})
+	applet.Register(&applet.Applet{Name: "stat", Short: "Display file status", Func: runStat})
 }
 
-func runFind(args []string) int {
-	paths := []string{}
-	namePattern := ""
-	typeFilter := ""
-	sizeExpr := ""
-	maxDepth := -1
+func runStat(args []string) int {
+	files := []string{}
+	format := "" // -c FORMAT
+	follow := true // -L (follow symlinks, default)
+	terse := false // -t (terse)
 
 	i := 1
 	for ; i < len(args); i++ {
@@ -30,148 +32,47 @@ func runFind(args []string) int {
 			i++
 			break
 		}
-		if strings.HasPrefix(a, "-name") {
-			if i+1 < len(args) {
-				i++
-				namePattern = args[i]
-			}
-			continue
-		}
-		if strings.HasPrefix(a, "-type") {
-			if i+1 < len(args) {
-				i++
-				typeFilter = args[i]
-			}
-			continue
-		}
-		if strings.HasPrefix(a, "-size") {
-			if i+1 < len(args) {
-				i++
-				sizeExpr = args[i]
-			}
-			continue
-		}
-		if strings.HasPrefix(a, "-maxdepth") {
-			if i+1 < len(args) {
-				i++
-				fmt.Sscanf(args[i], "%d", &maxDepth)
-			}
-			continue
-		}
-		if !strings.HasPrefix(a, "-") {
-			paths = append(paths, a)
-		}
-	}
-	paths = append(paths, args[i:]...)
-	if len(paths) == 0 {
-		paths = []string{"."}
-	}
-
-	exitCode := 0
-	for _, root := range paths {
-		err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
-			if err != nil {
-				return nil
-			}
-
-			// Check depth
-			if maxDepth >= 0 {
-				rel, _ := filepath.Rel(root, path)
-				depth := strings.Count(rel, string(os.PathSeparator)) + 1
-				if depth > maxDepth {
-					return filepath.SkipDir
-				}
-			}
-
-			// Name filter
-			if namePattern != "" {
-				matched, _ := filepath.Match(namePattern, info.Name())
-				if !matched {
-					return nil
-				}
-			}
-
-			// Type filter
-			if typeFilter != "" {
-				switch typeFilter {
-				case "f":
-					if info.IsDir() {
-						return nil
-					}
-				case "d":
-					if !info.IsDir() {
-						return nil
-					}
-				case "l":
-					if info.Mode()&os.ModeSymlink == 0 {
-						return nil
-					}
-				}
-			}
-
-			// Size filter
-			if sizeExpr != "" {
-				if !matchSize(info.Size(), sizeExpr) {
-					return nil
-				}
-			}
-
-			fmt.Println(path)
-			return nil
-		})
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "find: %s: %v\n", root, err)
-			exitCode = 1
-		}
-	}
-	return exitCode
-}
-
-func matchSize(size int64, expr string) bool {
-	if len(expr) == 0 {
-		return true
-	}
-	unit := int64(1)
-	s := expr
-	switch expr[len(expr)-1] {
-	case 'c':
-		unit = 1
-		s = expr[:len(expr)-1]
-	case 'k':
-		unit = 1024
-		s = expr[:len(expr)-1]
-	case 'M':
-		unit = 1024 * 1024
-		s = expr[:len(expr)-1]
-	case 'G':
-		unit = 1024 * 1024 * 1024
-		s = expr[:len(expr)-1]
-	}
-	var n int64
-	fmt.Sscanf(s, "%d", &n)
-	return size >= n*unit
-}
-
-func init() {
-	applet.Register(&applet.Applet{Name: "stat", Short: "Display file status", Func: runStat})
-}
-
-func runStat(args []string) int {
-	files := []string{}
-
-	for _, a := range args[1:] {
 		if a == "-f" {
+			// Filesystem status (simplified: just skip)
+			continue
+		}
+		if a == "-L" {
+			follow = true
+			continue
+		}
+		if a == "-l" {
+			follow = false // dereference = false
+			continue
+		}
+		if a == "-t" || a == "--terse" {
+			terse = true
+			continue
+		}
+		if strings.HasPrefix(a, "-c") {
+			if len(a) > 2 {
+				format = a[2:]
+			} else if i+1 < len(args) {
+				i++
+				format = args[i]
+			}
+			continue
+		}
+		if strings.HasPrefix(a, "--format=") {
+			format = a[8:]
 			continue
 		}
 		if !strings.HasPrefix(a, "-") {
 			files = append(files, a)
 		}
 	}
+	files = append(files, args[i:]...)
 
 	if len(files) == 0 {
 		fmt.Fprintf(os.Stderr, "stat: missing operand\n")
 		return 1
 	}
+
+	_ = follow
 
 	exitCode := 0
 	for _, fname := range files {
@@ -181,13 +82,205 @@ func runStat(args []string) int {
 			exitCode = 1
 			continue
 		}
-		fmt.Printf("  File: %q\n", fname)
-		fmt.Printf("  Size: %d\tBlocks: %d\tIO Block: %d\t%v\n",
-			info.Size(), info.Size()/512+1, 4096, info.IsDir())
-		fmt.Printf("Access: %v\n", info.Mode())
-		fmt.Printf("Modify: %v\n", info.ModTime())
+
+		stat, _ := info.Sys().(*syscall.Stat_t)
+
+		if format != "" {
+			fmt.Print(expandStatFormat(format, fname, info, stat))
+		} else if terse {
+			fmt.Printf("%s %d %d %d %o %d %d %d %d %d %d\n",
+				fname, info.Size(), blocks(info), 0,
+				info.Mode()&07777, 0, 0, 0,
+				info.ModTime().Unix(), 0, 0)
+		} else {
+			fmt.Printf("  File: %s\n", fname)
+			if stat != nil {
+				fmt.Printf("  Size: %-15d Blocks: %-10d IO Block: %-6d %s\n",
+					info.Size(), stat.Blocks, stat.Blksize, fileTypeStr(info))
+				fmt.Printf("Device: %xh/%dd\tInode: %-10d Links: %d\n",
+					stat.Rdev, stat.Rdev, stat.Ino, stat.Nlink)
+			} else {
+				fmt.Printf("  Size: %-15d Blocks: %-10d IO Block: %-6d %s\n",
+					info.Size(), blocks(info), 4096, fileTypeStr(info))
+			}
+			fmt.Printf("Access: (%04o/%s)  Uid: (%d/%s)  Gid: (%d/%s)\n",
+				info.Mode()&07777, info.Mode().String(),
+				uidOr(stat, 0), uidToName(uidOr(stat, 0)),
+				gidOr(stat, 0), gidToName(gidOr(stat, 0)))
+			fmt.Printf("Access: %s\n", info.ModTime().Format("2006-01-02 15:04:05.000000000 -0700"))
+			fmt.Printf("Modify: %s\n", info.ModTime().Format("2006-01-02 15:04:05.000000000 -0700"))
+			fmt.Printf("Change: %s\n", info.ModTime().Format("2006-01-02 15:04:05.000000000 -0700"))
+			fmt.Printf(" Birth: -\n")
+		}
 	}
 	return exitCode
+}
+
+func blocks(info os.FileInfo) int64 {
+	if stat, ok := info.Sys().(*syscall.Stat_t); ok {
+		return int64(stat.Blocks)
+	}
+	return (info.Size() + 511) / 512
+}
+
+func fileTypeStr(info os.FileInfo) string {
+	if info.IsDir() {
+		return "directory"
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return "symbolic link"
+	}
+	if info.Mode()&os.ModeDevice != 0 {
+		if info.Mode()&os.ModeCharDevice != 0 {
+			return "character special"
+		}
+		return "block special"
+	}
+	if info.Mode()&os.ModeNamedPipe != 0 {
+		return "fifo"
+	}
+	if info.Mode()&os.ModeSocket != 0 {
+		return "socket"
+	}
+	return "regular file"
+}
+
+// expandStatFormat expands stat format sequences like %s, %f, etc.
+func expandStatFormat(format, fname string, info os.FileInfo, stat *syscall.Stat_t) string {
+	result := ""
+	for i := 0; i < len(format); i++ {
+		if format[i] == '%' && i+1 < len(format) {
+			i++
+			switch format[i] {
+			case 'n':
+				result += fname
+			case 's':
+				result += fmt.Sprintf("%d", info.Size())
+			case 'b':
+				result += fmt.Sprintf("%d", blocks(info))
+			case 'f':
+				result += fmt.Sprintf("%04x", info.Mode())
+			case 'a':
+				result += fmt.Sprintf("%04o", info.Mode()&07777)
+			case 'A':
+				result += info.Mode().String()
+			case 'u':
+				if stat != nil {
+					result += fmt.Sprintf("%d", stat.Uid)
+				} else {
+					result += "0"
+				}
+			case 'U':
+				if stat != nil {
+					result += uidToName(stat.Uid)
+				} else {
+					result += "root"
+				}
+			case 'g':
+				if stat != nil {
+					result += fmt.Sprintf("%d", stat.Gid)
+				} else {
+					result += "0"
+				}
+			case 'G':
+				if stat != nil {
+					result += gidToName(stat.Gid)
+				} else {
+					result += "root"
+				}
+			case 't':
+				if stat != nil {
+					result += fmt.Sprintf("%x", stat.Rdev>>8)
+				} else {
+					result += "0"
+				}
+			case 'T':
+				if stat != nil {
+					result += fmt.Sprintf("%x", stat.Rdev&0xff)
+				} else {
+					result += "0"
+				}
+			case 'i':
+				if stat != nil {
+					result += fmt.Sprintf("%d", stat.Ino)
+				} else {
+					result += "0"
+				}
+			case 'h':
+				if stat != nil {
+					result += fmt.Sprintf("%d", stat.Nlink)
+				} else {
+					result += "1"
+				}
+			case 'F':
+				result += fileTypeStr(info)
+			case 'm':
+				result += filepath.Dir(fname)
+			case 'Y':
+				result += info.ModTime().Format("2006-01-02 15:04:05.000000000 -0700")
+			case 'y':
+				result += info.ModTime().Format("2006-01-02 15:04:05 -0700")
+			case '%':
+				result += "%"
+			default:
+				result += "%" + string(format[i])
+			}
+		} else {
+			result += string(format[i])
+		}
+	}
+	if !strings.HasSuffix(result, "\n") {
+		result += "\n"
+	}
+	return result
+}
+
+func uidToName(uid uint32) string {
+	data, err := os.ReadFile("/etc/passwd")
+	if err == nil {
+		for _, line := range strings.Split(string(data), "\n") {
+			fields := strings.Split(line, ":")
+			if len(fields) >= 3 {
+				var id uint32
+				fmt.Sscanf(fields[2], "%d", &id)
+				if id == uid {
+					return fields[0]
+				}
+			}
+		}
+	}
+	return fmt.Sprintf("%d", uid)
+}
+
+func gidToName(gid uint32) string {
+	data, err := os.ReadFile("/etc/group")
+	if err == nil {
+		for _, line := range strings.Split(string(data), "\n") {
+			fields := strings.Split(line, ":")
+			if len(fields) >= 3 {
+				var id uint32
+				fmt.Sscanf(fields[2], "%d", &id)
+				if id == gid {
+					return fields[0]
+				}
+			}
+		}
+	}
+	return fmt.Sprintf("%d", gid)
+}
+
+func uidOr(stat *syscall.Stat_t, def uint32) uint32 {
+	if stat != nil {
+		return stat.Uid
+	}
+	return def
+}
+
+func gidOr(stat *syscall.Stat_t, def uint32) uint32 {
+	if stat != nil {
+		return stat.Gid
+	}
+	return def
 }
 
 func init() {
@@ -742,18 +835,68 @@ func runFile(args []string) int {
 			if string(buf[:4]) == "\x7fELF" {
 				mime = "ELF executable"
 			} else if string(buf[:2]) == "PK" {
-				mime = "Zip archive"
+				if n >= 4 && buf[2] == 0x03 && buf[3] == 0x04 {
+					mime = "Zip archive"
+				} else if n >= 4 && buf[2] == 0x05 && buf[3] == 0x06 {
+					mime = "Zip archive (empty)"
+				} else {
+					mime = "Zip archive"
+				}
 			} else if string(buf[:3]) == "GIF" {
 				mime = "GIF image"
 			} else if buf[0] == 0xFF && buf[1] == 0xD8 {
 				mime = "JPEG image"
 			} else if buf[0] == 0x89 && string(buf[1:4]) == "PNG" {
 				mime = "PNG image"
+			} else if string(buf[:4]) == "%PDF" {
+				mime = "PDF document"
+			} else if n >= 3 && buf[0] == 0x1f && buf[1] == 0x8b && buf[2] == 0x08 {
+				mime = "gzip compressed data"
+			} else if string(buf[:3]) == "BZh" {
+				mime = "bzip2 compressed data"
+			} else if string(buf[:6]) == "\xfd7zXZ" {
+				mime = "XZ compressed data"
+			} else if string(buf[:5]) == "ustar" {
+				mime = "POSIX tar archive"
 			} else if string(buf[:2]) == "#!" {
 				mime = "script"
+			} else if string(buf[:4]) == "RIFF" && n >= 12 && string(buf[8:12]) == "WAVE" {
+				mime = "WAVE audio"
+			} else if string(buf[:4]) == "RIFF" && n >= 12 && string(buf[8:12]) == "AVI " {
+				mime = "AVI video"
+			} else if string(buf[:4]) == "OggS" {
+				mime = "Ogg data"
+			} else if string(buf[:4]) == "fLaC" {
+				mime = "FLAC audio"
+			} else if string(buf[:3]) == "ID3" {
+				mime = "MP3 audio (ID3 tag)"
+			} else if buf[0] == 0xFF && (buf[1]&0xE0) == 0xE0 {
+				mime = "MPEG ADTS audio"
+			} else if string(buf[:4]) == "\x7fELF" {
+				mime = "ELF executable"
+			} else if buf[0] == 0xCA && buf[1] == 0xFE && buf[2] == 0xBA && buf[3] == 0xBE {
+				mime = "Java class file"
+			} else if buf[0] == 0xFE && buf[1] == 0xBB && buf[2] == 0xBF {
+				mime = "UTF-8 Unicode text (BOM)"
+			} else if buf[0] == 0xFF && buf[1] == 0xFE {
+				mime = "UTF-16 LE Unicode text (BOM)"
+			} else if buf[0] == 0xFE && buf[1] == 0xFF {
+				mime = "UTF-16 BE Unicode text (BOM)"
+			} else if string(buf[:4]) == "\x89HDF" {
+				mime = "Hierarchical Data Format"
 			} else if isText(buf[:n]) {
 				mime = "text"
 			}
+		} else if n >= 2 {
+			if string(buf[:2]) == "#!" {
+				mime = "script"
+			} else if buf[0] == 0x1f && buf[1] == 0x8b {
+				mime = "gzip compressed data"
+			} else if isText(buf[:n]) {
+				mime = "text"
+			}
+		} else if n == 0 {
+			mime = "empty"
 		}
 		fmt.Printf("%s: %s\n", fname, mime)
 	}

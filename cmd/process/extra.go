@@ -19,53 +19,93 @@ func init() {
 }
 
 func runIostat(args []string) int {
+	interval := 0
 	count := 1
-	if len(args) > 1 {
-		fmt.Sscanf(args[1], "%d", &count)
+	flags := []string{}
+	posArgs := []string{}
+
+	for _, a := range args[1:] {
+		if strings.HasPrefix(a, "-") {
+			flags = append(flags, a)
+		} else {
+			posArgs = append(posArgs, a)
+		}
 	}
+	if len(posArgs) >= 1 {
+		fmt.Sscanf(posArgs[0], "%d", &interval)
+	}
+	if len(posArgs) >= 2 {
+		fmt.Sscanf(posArgs[1], "%d", &count)
+	}
+	if interval == 0 {
+		count = 1
+	}
+
 	for i := 0; i < count; i++ {
 		if runtime.GOOS == "linux" {
-			data, err := os.ReadFile("/proc/stat")
-			if err == nil {
-				fmt.Printf("avg-cpu:  %%user   %%nice %%system %%iowait  %%steal   %%idle\n")
-				for _, line := range strings.Split(string(data), "\n") {
-					if strings.HasPrefix(line, "cpu ") {
-						parts := strings.Fields(line)
-						if len(parts) >= 8 {
-							user, _ := strconv.ParseFloat(parts[1], 64)
-							nice, _ := strconv.ParseFloat(parts[2], 64)
-							sys, _ := strconv.ParseFloat(parts[3], 64)
-							idle, _ := strconv.ParseFloat(parts[4], 64)
-							total := user + nice + sys + idle
-							fmt.Printf("          %.1f    %.1f    %.1f    %.1f    %.1f    %.1f\n",
-								user/total*100, nice/total*100, sys/total*100, 0.0, 0.0, idle/total*100)
-						}
-					}
-				}
-			}
-			data, err = os.ReadFile("/proc/diskstats")
-			if err == nil {
-				fmt.Printf("\nDevice             tps    kB_read/s    kB_wrtn/s    kB_read    kB_wrtn\n")
-				for _, line := range strings.Split(string(data), "\n") {
-					parts := strings.Fields(line)
-					if len(parts) >= 14 {
-						dev := parts[2]
-						reads, _ := strconv.ParseInt(parts[5], 10, 64)
-						writes, _ := strconv.ParseInt(parts[9], 10, 64)
-						if reads > 0 || writes > 0 {
-							fmt.Printf("%-18s %4d    %10d    %10d %10d %10d\n", dev, reads+writes, reads, writes, reads*512/1024, writes*512/1024)
-						}
-					}
-				}
-			}
+			printIostat()
 		} else {
-			fmt.Printf("iostat: not supported on this platform\n")
+			fmt.Fprintf(os.Stderr, "iostat: not supported on this platform\n")
+			return 1
 		}
-		if i < count-1 {
-			time.Sleep(time.Second)
+		if i < count-1 && interval > 0 {
+			time.Sleep(time.Duration(interval) * time.Second)
 		}
 	}
 	return 0
+}
+
+func printIostat() {
+	data, err := os.ReadFile("/proc/stat")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "iostat: %v\n", err)
+		return
+	}
+
+	// CPU stats
+	fmt.Printf("avg-cpu:  %%user   %%nice %%system %%iowait  %%steal   %%idle\n")
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(line, "cpu ") {
+			parts := strings.Fields(line)
+			if len(parts) >= 8 {
+				user, _ := strconv.ParseFloat(parts[1], 64)
+				nice, _ := strconv.ParseFloat(parts[2], 64)
+				sys, _ := strconv.ParseFloat(parts[3], 64)
+				idle, _ := strconv.ParseFloat(parts[4], 64)
+				iowait, _ := strconv.ParseFloat(parts[5], 64)
+				irq, _ := strconv.ParseFloat(parts[6], 64)
+				softirq, _ := strconv.ParseFloat(parts[7], 64)
+				total := user + nice + sys + idle + iowait + irq + softirq
+				if total == 0 {
+					total = 1
+				}
+				fmt.Printf("          %5.1f    %5.1f    %5.1f    %5.1f    %5.1f    %5.1f\n",
+					user/total*100, nice/total*100, sys/total*100, iowait/total*100, 0.0, idle/total*100)
+			}
+		}
+	}
+
+	// Disk stats
+	data2, err := os.ReadFile("/proc/diskstats")
+	if err != nil {
+		return
+	}
+	fmt.Printf("\nDevice             tps    kB_read/s    kB_wrtn/s    kB_read    kB_wrtn\n")
+	for _, line := range strings.Split(string(data2), "\n") {
+		parts := strings.Fields(line)
+		if len(parts) >= 14 {
+			dev := parts[2]
+			reads, _ := strconv.ParseInt(parts[5], 10, 64)
+			readSectors, _ := strconv.ParseInt(parts[6], 10, 64)
+			writes, _ := strconv.ParseInt(parts[9], 10, 64)
+			writeSectors, _ := strconv.ParseInt(parts[10], 10, 64)
+			if reads > 0 || writes > 0 {
+				tps := reads + writes
+				fmt.Printf("%-18s %4d    %10.1f    %10.1f %10d %10d\n",
+					dev, tps, float64(readSectors)/2.0, float64(writeSectors)/2.0, readSectors/2, writeSectors/2)
+			}
+		}
+	}
 }
 
 // --- lsof ---
@@ -74,41 +114,84 @@ func init() {
 }
 
 func runLsof(args []string) int {
-	if runtime.GOOS == "linux" {
-		entries, err := os.ReadDir("/proc")
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "lsof: %v\n", err)
-			return 1
-		}
-		fmt.Printf("%-8s %5s %-10s %s\n", "COMMAND", "PID", "TYPE", "NAME")
-		for _, entry := range entries {
-			pid, err := strconv.Atoi(entry.Name())
-			if err != nil {
-				continue
-			}
-			comm, err := os.ReadFile(fmt.Sprintf("/proc/%d/comm", pid))
-			if err != nil {
-				continue
-			}
-			cmdName := strings.TrimSpace(string(comm))
-
-			fdDir := fmt.Sprintf("/proc/%d/fd", pid)
-			fds, err := os.ReadDir(fdDir)
-			if err != nil {
-				continue
-			}
-			for _, fd := range fds {
-				link, err := os.Readlink(fmt.Sprintf("%s/%s", fdDir, fd.Name()))
-				if err != nil {
-					continue
-				}
-				fmt.Printf("%-8s %5d %-10s %s\n", cmdName, pid, "REG", link)
-			}
-		}
-		return 0
+	if runtime.GOOS != "linux" {
+		fmt.Fprintf(os.Stderr, "lsof: not supported on this platform\n")
+		return 1
 	}
-	fmt.Fprintf(os.Stderr, "lsof: not supported on this platform\n")
-	return 1
+
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "lsof: %v\n", err)
+		return 1
+	}
+
+	fmt.Printf("%-8s %5s %4s %-10s %10s %8s %s\n", "COMMAND", "PID", "FD", "TYPE", "DEVICE", "SIZE", "NODE", "NAME")
+	for _, entry := range entries {
+		pid, err := strconv.Atoi(entry.Name())
+		if err != nil {
+			continue
+		}
+		comm, err := os.ReadFile(fmt.Sprintf("/proc/%d/comm", pid))
+		if err != nil {
+			continue
+		}
+		cmdName := strings.TrimSpace(string(comm))
+
+		fdDir := fmt.Sprintf("/proc/%d/fd", pid)
+		fds, err := os.ReadDir(fdDir)
+		if err != nil {
+			continue
+		}
+		for _, fd := range fds {
+			fdNum := fd.Name()
+			link, err := os.Readlink(fmt.Sprintf("%s/%s", fdDir, fdNum))
+			if err != nil {
+				continue
+			}
+
+			// Determine type
+			fdType := "REG"
+			device := ""
+			size := ""
+			node := ""
+
+			switch {
+			case link == "/dev/null" || link == "/dev/zero" || link == "/dev/full":
+				fdType = "CHR"
+				device = "1,3"
+			case strings.HasPrefix(link, "socket:"):
+				fdType = "IPv4"
+				inode := strings.TrimSuffix(strings.TrimPrefix(link, "socket:["), "]")
+				node = inode
+			case strings.HasPrefix(link, "pipe:"):
+				fdType = "FIFO"
+				inode := strings.TrimSuffix(strings.TrimPrefix(link, "pipe:["), "]")
+				node = inode
+			case strings.HasPrefix(link, "[anon]"):
+				fdType = "REG"
+			default:
+				fdType = "REG"
+				if info, err := os.Stat(link); err == nil {
+					if info.IsDir() {
+						fdType = "DIR"
+					}
+					size = fmt.Sprintf("%d", info.Size())
+				}
+			}
+
+			// Get file stat for device/inode
+			if st, err := os.Stat(link); err == nil {
+				if sys, ok := st.Sys().(*syscall.Stat_t); ok {
+					device = fmt.Sprintf("%d,%d", sys.Dev>>8, sys.Dev&0xff)
+					node = fmt.Sprintf("%d", sys.Ino)
+				}
+			}
+
+			fmt.Printf("%-8s %5s %4s %-10s %10s %8s %8s %s\n",
+				cmdName, pid, fdNum, fdType, device, size, node, link)
+		}
+	}
+	return 0
 }
 
 // --- killall5 ---
@@ -260,33 +343,65 @@ func init() {
 }
 
 func runMpstat(args []string) int {
-	if runtime.GOOS == "linux" {
-		data, err := os.ReadFile("/proc/stat")
-		if err != nil {
+	interval := 0
+	count := 1
+	posArgs := []string{}
+	for _, a := range args[1:] {
+		if !strings.HasPrefix(a, "-") {
+			posArgs = append(posArgs, a)
+		}
+	}
+	if len(posArgs) >= 1 {
+		fmt.Sscanf(posArgs[0], "%d", &interval)
+	}
+	if len(posArgs) >= 2 {
+		fmt.Sscanf(posArgs[1], "%d", &count)
+	}
+	if interval == 0 {
+		count = 1
+	}
+
+	for i := 0; i < count; i++ {
+		if runtime.GOOS == "linux" {
+			printMpstat()
+		} else {
+			fmt.Fprintf(os.Stderr, "mpstat: not supported\n")
 			return 1
 		}
-		fmt.Printf("%-8s  %%usr  %%nice   %%sys %%iowait  %%irq  %%soft  %%steal  %%guest  %%gnice   %%idle\n", "CPU")
-		for _, line := range strings.Split(string(data), "\n") {
-			if strings.HasPrefix(line, "cpu") {
-				parts := strings.Fields(line)
-				if len(parts) >= 8 {
-					user, _ := strconv.ParseFloat(parts[1], 64)
-					nice, _ := strconv.ParseFloat(parts[2], 64)
-					sys, _ := strconv.ParseFloat(parts[3], 64)
-					idle, _ := strconv.ParseFloat(parts[4], 64)
-					total := user + nice + sys + idle
-					if total == 0 {
-						total = 1
-					}
-					fmt.Printf("%-8s %5.1f  %5.1f  %5.1f    %5.1f  %5.1f  %5.1f    %5.1f    %5.1f    %5.1f    %5.1f\n",
-						parts[0], user/total*100, nice/total*100, sys/total*100, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, idle/total*100)
+		if i < count-1 && interval > 0 {
+			time.Sleep(time.Duration(interval) * time.Second)
+		}
+	}
+	return 0
+}
+
+func printMpstat() {
+	data, err := os.ReadFile("/proc/stat")
+	if err != nil {
+		return
+	}
+	fmt.Printf("%-8s  %%usr  %%nice   %%sys %%iowait  %%irq  %%soft  %%steal  %%guest  %%gnice   %%idle\n", "CPU")
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(line, "cpu") {
+			parts := strings.Fields(line)
+			if len(parts) >= 8 {
+				user, _ := strconv.ParseFloat(parts[1], 64)
+				nice, _ := strconv.ParseFloat(parts[2], 64)
+				sys, _ := strconv.ParseFloat(parts[3], 64)
+				idle, _ := strconv.ParseFloat(parts[4], 64)
+				iowait, _ := strconv.ParseFloat(parts[5], 64)
+				irq, _ := strconv.ParseFloat(parts[6], 64)
+				softirq, _ := strconv.ParseFloat(parts[7], 64)
+				total := user + nice + sys + idle + iowait + irq + softirq
+				if total == 0 {
+					total = 1
 				}
+				fmt.Printf("%-8s %5.1f  %5.1f  %5.1f    %5.1f  %5.1f  %5.1f    %5.1f    %5.1f    %5.1f    %5.1f\n",
+					parts[0], user/total*100, nice/total*100, sys/total*100, iowait/total*100,
+					irq/total*100, softirq/total*100, 0.0, 0.0, 0.0, idle/total*100)
 			}
 		}
-		return 0
 	}
-	fmt.Fprintf(os.Stderr, "mpstat: not supported\n")
-	return 1
 }
 
 // --- sysctl ---
@@ -383,8 +498,44 @@ func init() {
 }
 
 func runPowertop(args []string) int {
-	fmt.Fprintf(os.Stderr, "powertop: not yet implemented\n")
-	return 1
+	// Read CPU frequency and power info from sysfs
+	if runtime.GOOS != "linux" {
+		fmt.Fprintf(os.Stderr, "powertop: not supported\n")
+		return 1
+	}
+
+	for i := 0; i < 5; i++ {
+		fmt.Print("\033[2J\033[H")
+		fmt.Printf("PowerTOP - %s\n\n", time.Now().Format("15:04:05"))
+
+		// CPU frequency
+		cpus, _ := filepath.Glob("/sys/devices/system/cpu/cpu[0-9]*/cpufreq/scaling_cur_freq")
+		if len(cpus) > 0 {
+			fmt.Printf("CPU frequency:\n")
+			for _, cpu := range cpus {
+				data, _ := os.ReadFile(cpu)
+				freq := strings.TrimSpace(string(data))
+				name := filepath.Base(filepath.Dir(filepath.Dir(cpu)))
+				fmt.Printf("  %s: %s kHz\n", name, freq)
+			}
+		}
+
+		// Battery
+		batteries, _ := filepath.Glob("/sys/class/power_supply/BAT*/capacity")
+		if len(batteries) > 0 {
+			fmt.Printf("\nBattery:\n")
+			for _, bat := range batteries {
+				data, _ := os.ReadFile(bat)
+				cap := strings.TrimSpace(string(data))
+				name := filepath.Base(filepath.Dir(bat))
+				status, _ := os.ReadFile(filepath.Join(filepath.Dir(bat), "status"))
+				fmt.Printf("  %s: %s%% (%s)\n", name, cap, strings.TrimSpace(string(status)))
+			}
+		}
+
+		time.Sleep(time.Second)
+	}
+	return 0
 }
 
 // --- smemcap ---
@@ -393,8 +544,59 @@ func init() {
 }
 
 func runSmemcap(args []string) int {
-	fmt.Fprintf(os.Stderr, "smemcap: not yet implemented\n")
-	return 1
+	// Read memory info from /proc
+	if runtime.GOOS != "linux" {
+		fmt.Fprintf(os.Stderr, "smemcap: not supported\n")
+		return 1
+	}
+
+	// Print memory info in a format similar to smem
+	fmt.Printf("%-8s %-8s %-8s %-8s %s\n", "PID", "User", "Swap", "USS", "Command")
+
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		return 1
+	}
+
+	for _, entry := range entries {
+		pid, err := strconv.Atoi(entry.Name())
+		if err != nil {
+			continue
+		}
+
+		comm, err := os.ReadFile(fmt.Sprintf("/proc/%d/comm", pid))
+		if err != nil {
+			continue
+		}
+
+		// Read smaps for memory info
+		smapsData, err := os.ReadFile(fmt.Sprintf("/proc/%d/smaps", pid))
+		if err != nil {
+			continue
+		}
+
+		var swapTotal, ussTotal int64
+		for _, line := range strings.Split(string(smapsData), "\n") {
+			if strings.HasPrefix(line, "Swap:") {
+				parts := strings.Fields(line)
+				if len(parts) >= 2 {
+					val, _ := strconv.ParseInt(parts[1], 10, 64)
+					swapTotal += val
+				}
+			}
+			if strings.HasPrefix(line, "Private_Dirty:") {
+				parts := strings.Fields(line)
+				if len(parts) >= 2 {
+					val, _ := strconv.ParseInt(parts[1], 10, 64)
+					ussTotal += val
+				}
+			}
+		}
+
+		fmt.Printf("%-8d %-8s %-8d %-8d %s\n",
+			pid, "root", swapTotal, ussTotal, strings.TrimSpace(string(comm)))
+	}
+	return 0
 }
 
 // helper for sysctl Walk
@@ -418,3 +620,75 @@ func filepathWalk(path string, fn func(string, os.FileInfo, error) error) error 
 	}
 	return nil
 }
+
+// --- renice ---
+func init() {
+	applet.Register(&applet.Applet{Name: "renice", Short: "Alter priority of running processes", Func: runRenice})
+}
+
+func runRenice(args []string) int {
+	priority := 0
+	pids := []int{}
+	absolute := false
+
+	i := 1
+	for i < len(args) {
+		a := args[i]
+		if a == "-n" && i+1 < len(args) {
+			i++
+			fmt.Sscanf(args[i], "%d", &priority)
+		} else if a == "-p" {
+			// PID mode (default)
+		} else if a == "-g" {
+			// Process group mode
+		} else if a == "-u" {
+			// User mode
+		} else if strings.HasPrefix(a, "-") && len(a) > 1 {
+			// Could be -10, +5, etc.
+			fmt.Sscanf(a, "%d", &priority)
+		} else if strings.HasPrefix(a, "+") {
+			fmt.Sscanf(a[1:], "%d", &priority)
+			absolute = false
+		} else {
+			pid, err := strconv.Atoi(a)
+			if err == nil {
+				pids = append(pids, pid)
+			}
+		}
+		i++
+	}
+
+	if len(pids) == 0 {
+		fmt.Fprintf(os.Stderr, "renice: missing pid\n")
+		return 1
+	}
+
+	if absolute {
+		// Set absolute priority
+		for _, pid := range pids {
+			if err := syscall.Setpriority(syscall.PRIO_PROCESS, pid, priority); err != nil {
+				fmt.Fprintf(os.Stderr, "renice: %d: %v\n", pid, err)
+				return 1
+			}
+			fmt.Printf("%d: set priority %d\n", pid, priority)
+		}
+	} else {
+		// Adjust priority
+		for _, pid := range pids {
+			current, err := syscall.Getpriority(syscall.PRIO_PROCESS, pid)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "renice: %d: %v\n", pid, err)
+				return 1
+			}
+			newPrio := current + priority
+			if err := syscall.Setpriority(syscall.PRIO_PROCESS, pid, newPrio); err != nil {
+				fmt.Fprintf(os.Stderr, "renice: %d: %v\n", pid, err)
+				return 1
+			}
+			fmt.Printf("%d: set priority %d\n", pid, newPrio)
+		}
+	}
+	return 0
+}
+
+// --- fuser --- moved to fuser.go ---

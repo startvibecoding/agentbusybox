@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -592,19 +593,71 @@ func init() {
 
 func runStrings(args []string) int {
 	minLen := 4
+	printName := false    // -f
+	printOffset := false  // -o
+	radix := "o"          // -t o|d|x
 	files := []string{}
 
-	for _, a := range args[1:] {
-		if strings.HasPrefix(a, "-n") && len(a) > 2 {
-			fmt.Sscanf(a[2:], "%d", &minLen)
+	i := 1
+	for ; i < len(args); i++ {
+		a := args[i]
+		if a == "--" {
+			i++
+			break
+		}
+		if !strings.HasPrefix(a, "-") || len(a) == 1 {
+			files = append(files, a)
 			continue
 		}
-		if !strings.HasPrefix(a, "-") {
-			files = append(files, a)
+		// Handle combined flags like -fo, -n4, -tx
+		j := 1
+		for j < len(a) {
+			switch a[j] {
+			case 'a': // scan whole file (default)
+				j++
+			case 'f':
+				printName = true
+				j++
+			case 'o':
+				printOffset = true
+				j++
+			case 'n':
+				j++
+				if j < len(a) {
+					// -nLEN attached
+					fmt.Sscanf(a[j:], "%d", &minLen)
+					j = len(a)
+				} else if i+1 < len(args) {
+					// -n LEN separate
+					i++
+					fmt.Sscanf(args[i], "%d", &minLen)
+				}
+			case 't':
+				printOffset = true
+				j++
+				if j < len(a) {
+					// -tFORMAT attached
+					radix = a[j:]
+					j = len(a)
+				} else if i+1 < len(args) {
+					// -t FORMAT separate
+					i++
+					radix = args[i]
+				}
+			default:
+				j++
+			}
 		}
 	}
+	files = append(files, args[i:]...)
+
 	if len(files) == 0 {
 		files = []string{"-"}
+	}
+
+	if radix != "o" && radix != "d" && radix != "x" {
+		fmt.Fprintf(os.Stderr, "strings: invalid radix '%s'\n", radix)
+		return 1
 	}
 
 	for _, fname := range files {
@@ -620,18 +673,55 @@ func runStrings(args []string) int {
 			return 1
 		}
 
+		displayName := fname
+		if fname == "-" {
+			displayName = "{standard input}"
+		}
+
 		current := ""
+		offset := int64(0)
+		startOffset := int64(0)
 		for _, b := range data {
 			if b >= 32 && b < 127 {
+				if len(current) == 0 {
+					startOffset = offset
+				}
 				current += string(rune(b))
 			} else {
 				if len(current) >= minLen {
+					if printName {
+						fmt.Printf("%s: ", displayName)
+					}
+					if printOffset {
+						switch radix {
+						case "o":
+							fmt.Printf("%7o ", startOffset)
+						case "x":
+							fmt.Printf("%7x ", startOffset)
+						case "d":
+							fmt.Printf("%7d ", startOffset)
+						}
+					}
 					fmt.Println(current)
 				}
 				current = ""
 			}
+			offset++
 		}
 		if len(current) >= minLen {
+			if printName {
+				fmt.Printf("%s: ", displayName)
+			}
+			if printOffset {
+				switch radix {
+				case "o":
+					fmt.Printf("%7o ", startOffset)
+				case "x":
+					fmt.Printf("%7x ", startOffset)
+				case "d":
+					fmt.Printf("%7d ", startOffset)
+				}
+			}
 			fmt.Println(current)
 		}
 	}
@@ -744,52 +834,119 @@ func init() {
 }
 
 func runCmp(args []string) int {
-	verbose := false
+	verbose := false   // -l
+	silent := false    // -s
+	maxBytes := int64(0) // -n COUNT
 	files := []string{}
-	for _, a := range args[1:] {
+
+	i := 1
+	for ; i < len(args); i++ {
+		a := args[i]
+		if a == "--" {
+			i++
+			break
+		}
 		if a == "-l" || a == "--verbose" {
 			verbose = true
+			continue
+		}
+		if a == "-s" || a == "--quiet" || a == "--silent" {
+			silent = true
+			continue
+		}
+		if strings.HasPrefix(a, "-n") {
+			if len(a) > 2 {
+				fmt.Sscanf(a[2:], "%d", &maxBytes)
+			} else if i+1 < len(args) {
+				i++
+				fmt.Sscanf(args[i], "%d", &maxBytes)
+			}
 			continue
 		}
 		if !strings.HasPrefix(a, "-") {
 			files = append(files, a)
 		}
 	}
+	files = append(files, args[i:]...)
+
 	if len(files) != 2 {
-		fmt.Fprintf(os.Stderr, "cmp: missing operand\n")
+		if !silent {
+			fmt.Fprintf(os.Stderr, "cmp: missing operand\n")
+		}
 		return 1
 	}
 
-	data1, err := os.ReadFile(files[0])
+	f1, err := os.Open(files[0])
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "cmp: %s: %v\n", files[0], err)
+		if !silent {
+			fmt.Fprintf(os.Stderr, "cmp: %s: %v\n", files[0], err)
+		}
 		return 1
 	}
-	data2, err := os.ReadFile(files[1])
+	defer f1.Close()
+	f2, err := os.Open(files[1])
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "cmp: %s: %v\n", files[1], err)
+		if !silent {
+			fmt.Fprintf(os.Stderr, "cmp: %s: %v\n", files[1], err)
+		}
 		return 1
 	}
+	defer f2.Close()
 
-	minLen := len(data1)
-	if len(data2) < minLen {
-		minLen = len(data2)
-	}
+	buf1 := make([]byte, 8192)
+	buf2 := make([]byte, 8192)
+	offset := int64(0)
+	lineNum := 1
 
-	for i := 0; i < minLen; i++ {
-		if data1[i] != data2[i] {
-			if verbose {
-				fmt.Printf("%d %o %o\n", i+1, data1[i], data2[i])
-			} else {
-				fmt.Printf("%s %s differ: byte %d\n", files[0], files[1], i+1)
+	for {
+		n1, err1 := f1.Read(buf1)
+		n2, err2 := f2.Read(buf2)
+
+		minN := n1
+		if n2 < minN {
+			minN = n2
+		}
+		if maxBytes > 0 && offset+int64(minN) > maxBytes {
+			minN = int(maxBytes - offset)
+			if minN < 0 {
+				minN = 0
+			}
+		}
+
+		for i := 0; i < minN; i++ {
+			if buf1[i] == '\n' {
+				lineNum++
+			}
+			if buf1[i] != buf2[i] {
+				if silent {
+					return 1
+				}
+				if verbose {
+					fmt.Printf("%d %o %o\n", offset+int64(i)+1, buf1[i], buf2[i])
+				} else {
+					fmt.Printf("%s %s differ: byte %d, line %d\n", files[0], files[1], offset+int64(i)+1, lineNum)
+				}
+				return 1
+			}
+		}
+
+		if maxBytes > 0 && offset+int64(minN) >= maxBytes {
+			return 0
+		}
+
+		offset += int64(minN)
+
+		if n1 != n2 {
+			// Different number of bytes read - files differ in length
+			if !silent {
+				fmt.Fprintf(os.Stderr, "cmp: EOF on %s\n", files[0])
 			}
 			return 1
 		}
-	}
 
-	if len(data1) != len(data2) {
-		fmt.Printf("cmp: EOF on %s\n", files[0])
-		return 1
+		if err1 == io.EOF && err2 == io.EOF {
+			break
+		}
 	}
 	return 0
 }
@@ -799,30 +956,19 @@ func init() {
 }
 
 func runXargs(args []string) int {
-	maxArgs := 0
-	delimiter := ""
-	placeholder := "{}"
+	maxArgs := 0       // -n NUM
+	maxChars := 0       // -s NUM
+	verbose := false    // -t
+	nullTerm := false   // -0
+	replStr := ""       // -I STR
+	eofStr := ""        // -E STR
+	delimiter := ""     // -d DELIM
 	command := ""
 	commandArgs := []string{}
 
 	i := 1
 	for ; i < len(args); i++ {
 		a := args[i]
-		if a == "-n" && i+1 < len(args) {
-			i++
-			fmt.Sscanf(args[i], "%d", &maxArgs)
-			continue
-		}
-		if a == "-d" && i+1 < len(args) {
-			i++
-			delimiter = args[i]
-			continue
-		}
-		if a == "-I" && i+1 < len(args) {
-			i++
-			placeholder = args[i]
-			continue
-		}
 		if a == "--" {
 			i++
 			break
@@ -830,42 +976,184 @@ func runXargs(args []string) int {
 		if !strings.HasPrefix(a, "-") {
 			break
 		}
+		switch a {
+		case "-t":
+			verbose = true
+		case "-0":
+			nullTerm = true
+		case "-x":
+			// exit if size exceeded (handled implicitly)
+		case "-p":
+			// interactive confirmation (simplified: just print)
+			verbose = true
+		default:
+			if strings.HasPrefix(a, "-n") {
+				if len(a) > 2 {
+					fmt.Sscanf(a[2:], "%d", &maxArgs)
+				} else if i+1 < len(args) {
+					i++
+					fmt.Sscanf(args[i], "%d", &maxArgs)
+				}
+			} else if strings.HasPrefix(a, "-s") {
+				if len(a) > 2 {
+					fmt.Sscanf(a[2:], "%d", &maxChars)
+				} else if i+1 < len(args) {
+					i++
+					fmt.Sscanf(args[i], "%d", &maxChars)
+				}
+			} else if strings.HasPrefix(a, "-I") {
+				if len(a) > 2 {
+					replStr = a[2:]
+				} else if i+1 < len(args) {
+					i++
+					replStr = args[i]
+				}
+			} else if strings.HasPrefix(a, "-E") {
+				if len(a) > 2 {
+					eofStr = a[2:]
+				} else if i+1 < len(args) {
+					i++
+					eofStr = args[i]
+				}
+			} else if strings.HasPrefix(a, "-d") {
+				if len(a) > 2 {
+					delimiter = a[2:]
+				} else if i+1 < len(args) {
+					i++
+					delimiter = args[i]
+				}
+			}
+		}
 	}
 
+	if i >= len(args) {
+		fmt.Fprintf(os.Stderr, "xargs: no command specified\n")
+		return 1
+	}
 	command = args[i]
 	commandArgs = args[i+1:]
 
-	// Read stdin
-	scanner := bufio.NewScanner(os.Stdin)
+	if maxChars == 0 {
+		maxChars = 131072
+	}
+
+	// Read items from stdin
 	var items []string
-	for scanner.Scan() {
-		if delimiter != "" {
-			items = append(items, strings.Split(scanner.Text(), delimiter)...)
-		} else {
-			items = append(items, strings.Fields(scanner.Text())...)
+	if nullTerm {
+		// Read NUL-delimited input
+		data, err := io.ReadAll(os.Stdin)
+		if err != nil {
+			return 1
+		}
+		items = strings.Split(string(data), "\x00")
+		// Remove trailing empty item
+		if len(items) > 0 && items[len(items)-1] == "" {
+			items = items[:len(items)-1]
+		}
+	} else if delimiter != "" {
+		d := rune(delimiter[0])
+		scanner := bufio.NewScanner(os.Stdin)
+		for scanner.Scan() {
+			line := scanner.Text()
+			for _, part := range strings.Split(line, string(d)) {
+				if part != "" {
+					items = append(items, part)
+				}
+			}
+		}
+	} else {
+		scanner := bufio.NewScanner(os.Stdin)
+		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+		for scanner.Scan() {
+			line := scanner.Text()
+			// Check for EOF string
+			if eofStr != "" && line == eofStr {
+				break
+			}
+			items = append(items, strings.Fields(line)...)
 		}
 	}
 
-	if maxArgs == 0 {
-		maxArgs = len(items)
-	}
-	if maxArgs == 0 {
-		maxArgs = 1
+	if len(items) == 0 && replStr == "" {
+		// No items, execute command once with no extra args
+		if verbose {
+			fmt.Fprintf(os.Stderr, "%s\n", command)
+		}
+		cmd := exec.Command(command)
+		cmd.Stdin = os.Stdin
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		err := cmd.Run()
+		if err != nil {
+			return 123
+		}
+		return 0
 	}
 
 	exitCode := 0
-	for start := 0; start < len(items); start += maxArgs {
-		end := start + maxArgs
-		if end > len(items) {
-			end = len(items)
-		}
-		batch := items[start:end]
 
-		args := append(commandArgs, batch...)
-		_ = placeholder
-		_ = command
-		// In real implementation, would exec command with args
-		fmt.Fprintf(os.Stderr, "xargs: %s %s\n", command, strings.Join(args, " "))
+	if replStr != "" {
+		// -I replacement mode: one invocation per item
+		for _, item := range items {
+			fullArgs := make([]string, len(commandArgs))
+			copy(fullArgs, commandArgs)
+			for j, arg := range fullArgs {
+				fullArgs[j] = strings.ReplaceAll(arg, replStr, item)
+			}
+			if verbose {
+				fmt.Fprintf(os.Stderr, "%s %s\n", command, strings.Join(fullArgs, " "))
+			}
+			cmd := exec.Command(command, fullArgs...)
+			cmd.Stdin = os.Stdin
+			cmd.Stdout = os.Stdout
+			cmd.Stderr = os.Stderr
+			err := cmd.Run()
+			if err != nil {
+				exitCode = 123
+			}
+		}
+	} else {
+		// Batch mode
+		if maxArgs <= 0 {
+			maxArgs = len(items)
+		}
+		if maxArgs <= 0 {
+			maxArgs = 1
+		}
+
+		for start := 0; start < len(items); start += maxArgs {
+			end := start + maxArgs
+			if end > len(items) {
+				end = len(items)
+			}
+			batch := items[start:end]
+
+			cmdArgs := make([]string, len(commandArgs)+len(batch))
+			copy(cmdArgs, commandArgs)
+			copy(cmdArgs[len(commandArgs):], batch)
+
+			// Check total size
+			totalSize := len(command)
+			for _, a := range cmdArgs {
+				totalSize += len(a) + 1
+			}
+			if totalSize > maxChars {
+				fmt.Fprintf(os.Stderr, "xargs: argument line too long\n")
+				return 1
+			}
+
+			if verbose {
+				fmt.Fprintf(os.Stderr, "%s %s\n", command, strings.Join(cmdArgs, " "))
+			}
+			cmd := exec.Command(command, cmdArgs...)
+			cmd.Stdin = os.Stdin
+			cmd.Stdout = os.Stdout
+			cmd.Stderr = os.Stderr
+			err := cmd.Run()
+			if err != nil {
+				exitCode = 123
+			}
+		}
 	}
 	return exitCode
 }

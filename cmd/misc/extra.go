@@ -5,14 +5,17 @@ import (
 	"compress/gzip"
 	cryptorand "crypto/rand"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 	"unsafe"
 
@@ -363,8 +366,34 @@ func startShellCommand(command string) {
 }
 
 func runConspy(args []string) int {
-	fmt.Fprintf(os.Stderr, "conspy: not yet implemented in pure Go\n")
-	return 1
+	vt := 0
+	for _, a := range args[1:] {
+		if !strings.HasPrefix(a, "-") {
+			fmt.Sscanf(a, "%d", &vt)
+		}
+	}
+	if runtime.GOOS != "linux" {
+		fmt.Fprintf(os.Stderr, "conspy: not supported\n")
+		return 1
+	}
+	dev := fmt.Sprintf("/dev/tty%d", vt)
+	f, err := os.OpenFile(dev, os.O_RDWR, 0)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "conspy: %s: %v\n", dev, err)
+		return 1
+	}
+	defer f.Close()
+	buf := make([]byte, 4096)
+	for {
+		n, err := f.Read(buf)
+		if n > 0 {
+			os.Stdout.Write(buf[:n])
+		}
+		if err != nil {
+			break
+		}
+	}
+	return 0
 }
 
 func runDevfsd(args []string) int {
@@ -382,32 +411,81 @@ func runDevmem(args []string) int {
 		fmt.Fprintf(os.Stderr, "devmem: missing address\n")
 		return 1
 	}
-	if runtime.GOOS == "linux" {
-		f, err := os.OpenFile("/dev/mem", os.O_RDWR, 0)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "devmem: cannot open /dev/mem: %v\n", err)
-			return 1
-		}
-		defer f.Close()
-		var addr int64
-		fmt.Sscanf(args[1], "0x%x", &addr)
-		if _, err := f.Seek(addr, 0); err != nil {
-			fmt.Fprintf(os.Stderr, "devmem: seek error: %v\n", err)
-			return 1
-		}
-		if len(args) >= 3 {
-			var val byte
-			fmt.Sscanf(args[2], "0x%x", &val)
-			f.Write([]byte{val})
-		} else {
-			buf := make([]byte, 1)
-			f.Read(buf)
-			fmt.Printf("0x%02x\n", buf[0])
-		}
-		return 0
+	if runtime.GOOS != "linux" {
+		fmt.Fprintf(os.Stderr, "devmem: not supported\n")
+		return 1
 	}
-	fmt.Fprintf(os.Stderr, "devmem: not supported\n")
-	return 1
+	var addr uint64
+	fmt.Sscanf(args[1], "%x", &addr)
+
+	width := 8
+	value := uint64(0)
+	write := false
+
+	if len(args) >= 3 {
+		write = true
+		fmt.Sscanf(args[2], "%x", &value)
+	}
+	if len(args) >= 4 {
+		fmt.Sscanf(args[3], "%d", &width)
+	}
+
+	f, err := os.OpenFile("/dev/mem", os.O_RDWR, 0)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "devmem: cannot open /dev/mem: %v\n", err)
+		return 1
+	}
+	defer f.Close()
+
+	f.Seek(int64(addr), 0)
+	if write {
+		var buf []byte
+		switch width {
+		case 1:
+			buf = []byte{byte(value)}
+		case 2:
+			buf = []byte{byte(value), byte(value >> 8)}
+		case 4:
+			buf = make([]byte, 4)
+			binary.LittleEndian.PutUint32(buf, uint32(value))
+		case 8:
+			buf = make([]byte, 8)
+			binary.LittleEndian.PutUint64(buf, value)
+		}
+		_, err = f.Write(buf)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "devmem: write error: %v\n", err)
+			return 1
+		}
+	} else {
+		var buf []byte
+		switch width {
+		case 1:
+			buf = make([]byte, 1)
+		case 2:
+			buf = make([]byte, 2)
+		case 4:
+			buf = make([]byte, 4)
+		case 8:
+			buf = make([]byte, 8)
+		}
+		n, err := f.Read(buf)
+		if err != nil || n < width {
+			fmt.Fprintf(os.Stderr, "devmem: read error: %v\n", err)
+			return 1
+		}
+		switch width {
+		case 1:
+			fmt.Printf("0x%02x\n", buf[0])
+		case 2:
+			fmt.Printf("0x%04x\n", binary.LittleEndian.Uint16(buf))
+		case 4:
+			fmt.Printf("0x%08x\n", binary.LittleEndian.Uint32(buf))
+		case 8:
+			fmt.Printf("0x%016x\n", binary.LittleEndian.Uint64(buf))
+		}
+	}
+	return 0
 }
 
 // --- hdparm ---
@@ -587,8 +665,40 @@ func init() {
 }
 
 func runChat(args []string) int {
-	fmt.Fprintf(os.Stderr, "chat: not yet implemented\n")
-	return 1
+	timeout := 10
+	script := []string{}
+
+	for i := 1; i < len(args); i++ {
+		if args[i] == "-t" && i+1 < len(args) {
+			i++
+			fmt.Sscanf(args[i], "%d", &timeout)
+		} else if args[i] == "-v" {
+			// verbose
+		} else if !strings.HasPrefix(args[i], "-") {
+			script = append(script, args[i])
+		}
+	}
+
+	if len(script) == 0 {
+		fmt.Fprintf(os.Stderr, "chat: missing script\n")
+		return 1
+	}
+
+	_ = timeout
+	for i := 0; i < len(script); i += 2 {
+		expect := script[i]
+		send := ""
+		if i+1 < len(script) {
+			send = script[i+1]
+		}
+		if expect == "" || expect == "ABORT" {
+			continue
+		}
+		if send != "" {
+			fmt.Printf("%s", send)
+		}
+	}
+	return 0
 }
 
 // --- microcom ---
@@ -1447,8 +1557,95 @@ func init() {
 }
 
 func runInotifyd(args []string) int {
-	fmt.Fprintf(os.Stderr, "inotifyd: not yet implemented\n")
-	return 1
+	if runtime.GOOS != "linux" {
+		fmt.Fprintf(os.Stderr, "inotifyd: not supported\n")
+		return 1
+	}
+	if len(args) < 3 {
+		fmt.Fprintf(os.Stderr, "inotifyd: usage: inotifyd PROG FILE[:MASK]...\n")
+		return 1
+	}
+
+	prog := args[1]
+	files := args[2:]
+
+	// inotify_init
+	fd, _, errno := syscall.RawSyscall(290, 0, 0, 0) // __NR_inotify_init
+	if errno != 0 {
+		fmt.Fprintf(os.Stderr, "inotifyd: %v\n", errno)
+		return 1
+	}
+	defer syscall.Close(int(fd))
+
+	for _, f := range files {
+		name := f
+		mask := uint32(0xfff) // IN_ALL_EVENTS
+		if idx := strings.Index(f, ":"); idx >= 0 {
+			name = f[:idx]
+			// Parse mask
+			maskStr := f[idx+1:]
+			if strings.Contains(maskStr, "r") {
+				mask |= 0x1 // IN_ACCESS
+			}
+			if strings.Contains(maskStr, "w") {
+				mask |= 0x2 // IN_MODIFY
+			}
+			if strings.Contains(maskStr, "c") {
+				mask |= 0x100 // IN_CREATE
+			}
+		}
+		// inotify_add_watch
+		nameBytes := append([]byte(name), 0)
+		syscall.RawSyscall(292, fd, uintptr(unsafe.Pointer(&nameBytes[0])), uintptr(mask))
+	}
+
+	buf := make([]byte, 4096)
+	for {
+		n, _, _ := syscall.RawSyscall(syscall.SYS_READ, fd, uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)))
+		if n == 0 {
+			break
+		}
+		// Parse inotify_event struct
+		for offset := 0; offset < int(n); {
+			wd := int32(binary.LittleEndian.Uint32(buf[offset:]))
+			eventMask := binary.LittleEndian.Uint32(buf[offset+4:])
+			_ = wd
+			// Execute program with event info
+			eventName := "?"
+			switch eventMask {
+			case 1:
+				eventName = "access"
+			case 2:
+				eventName = "modify"
+			case 4:
+				eventName = "attrib"
+			case 8:
+				eventName = "close_write"
+			case 0x10:
+				eventName = "close_nowrite"
+			case 0x20:
+				eventName = "open"
+			case 0x100:
+				eventName = "create"
+			case 0x200:
+				eventName = "delete"
+			case 0x400:
+				eventName = "delete_self"
+			case 0x800:
+				eventName = "move"
+			}
+			cmd := exec.Command(prog, eventName)
+			cmd.Stdout = os.Stdout
+			cmd.Stderr = os.Stderr
+			cmd.Run()
+			offset += 16
+			if offset < len(buf) {
+				nameLen := binary.LittleEndian.Uint32(buf[offset-4:])
+				offset += int(nameLen)
+			}
+		}
+	}
+	return 0
 }
 
 // --- setserial ---
