@@ -26,12 +26,12 @@ const (
 )
 
 type viEditor struct {
-	file    string
-	lines   []string
-	curLine int
-	curCol  int
-	top     int
-	showNum bool
+	file     string
+	lines    []string
+	curLine  int
+	curCol   int
+	top      int
+	showNum  bool
 	modified bool
 
 	yank     []string

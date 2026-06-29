@@ -1173,8 +1173,7 @@ func init() {
 }
 
 func runDrop(args []string) int {
-	fmt.Fprintf(os.Stderr, "%s: not yet implemented in pure Go\n", args[0])
-	return 1
+	return runDropPlatform(args)
 }
 
 func runJn(args []string) int {
@@ -1362,45 +1361,110 @@ func parseUIDGID(uidStr, gidStr string) (int, int, error) {
 func runMim(args []string) int {
 	mimfile := "Mimfile"
 	target := ""
+	var targetArgs []string
+
 	for i := 1; i < len(args); i++ {
 		if args[i] == "-f" && i+1 < len(args) {
+			mimfile = args[i+1]
 			i++
-			mimfile = args[i]
 			continue
 		}
 		if target == "" {
 			target = args[i]
+		} else {
+			targetArgs = append(targetArgs, args[i])
 		}
 	}
+
 	data, err := os.ReadFile(mimfile)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "mim: %s: %v\n", mimfile, err)
 		return 1
 	}
-	if target == "" {
-		for _, line := range strings.Split(string(data), "\n") {
-			line = strings.TrimSpace(line)
-			if strings.HasSuffix(line, ":") {
-				target = strings.TrimSuffix(line, ":")
-				break
-			}
-		}
-	}
-	if target == "" {
-		fmt.Fprintf(os.Stderr, "mim: no target\n")
-		return 1
-	}
-	inTarget := false
-	for _, line := range strings.Split(string(data), "\n") {
+
+	lines := strings.Split(string(data), "\n")
+	var targets []string
+	targetMap := make(map[string][]string)
+	currentTarget := ""
+
+	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
-		if strings.HasSuffix(trimmed, ":") {
-			inTarget = strings.TrimSuffix(trimmed, ":") == target
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
 			continue
 		}
-		if inTarget && trimmed != "" {
-			fmt.Println(strings.TrimLeft(line, " \t"))
+		if strings.HasSuffix(trimmed, ":") {
+			currentTarget = strings.TrimSuffix(trimmed, ":")
+			targets = append(targets, currentTarget)
+			targetMap[currentTarget] = []string{}
+		} else if currentTarget != "" {
+			targetMap[currentTarget] = append(targetMap[currentTarget], line)
 		}
 	}
+
+	if len(targets) == 0 {
+		fmt.Fprintf(os.Stderr, "mim: no targets found in %s\n", mimfile)
+		return 1
+	}
+
+	if target == "" {
+		target = targets[0]
+	}
+
+	targetLines, exists := targetMap[target]
+	if !exists {
+		fmt.Fprintf(os.Stderr, "mim: target '%s' not found\n", target)
+		return 1
+	}
+
+	var sb strings.Builder
+	for _, l := range targetLines {
+		sb.WriteString(l)
+		sb.WriteString("\n")
+	}
+	scriptContent := sb.String()
+
+	shellExe := "sh"
+	if runtime.GOOS == "windows" {
+		if _, err := exec.LookPath("sh"); err != nil {
+			for _, l := range targetLines {
+				trimmedCmd := strings.TrimSpace(l)
+				if trimmedCmd == "" {
+					continue
+				}
+				cmd := exec.Command("cmd", "/c", trimmedCmd)
+				cmd.Stdin = os.Stdin
+				cmd.Stdout = os.Stdout
+				cmd.Stderr = os.Stderr
+				if err := cmd.Run(); err != nil {
+					if exitErr, ok := err.(*exec.ExitError); ok {
+						if status, ok := exitErr.Sys().(syscall.WaitStatus); ok {
+							return status.ExitStatus()
+						}
+					}
+					return 1
+				}
+			}
+			return 0
+		}
+	}
+
+	shellArgs := []string{"-s"}
+	shellArgs = append(shellArgs, targetArgs...)
+	cmd := exec.Command(shellExe, shellArgs...)
+	cmd.Stdin = strings.NewReader(scriptContent)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	if err := cmd.Run(); err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			if status, ok := exitErr.Sys().(syscall.WaitStatus); ok {
+				return status.ExitStatus()
+			}
+		}
+		fmt.Fprintf(os.Stderr, "mim: failed to execute script: %v\n", err)
+		return 1
+	}
+
 	return 0
 }
 

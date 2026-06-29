@@ -1,4 +1,4 @@
-.PHONY: help build build-all install test lint fmt clean run
+.PHONY: help build build-all install test lint fmt clean run build-docker-image
 .PHONY: build-linux build-darwin build-windows build-all
 .PHONY: dist dist-linux dist-darwin dist-windows dist-tarball dist-zip
 .PHONY: clean-all checksums
@@ -10,6 +10,7 @@ LDFLAGS=-ldflags "-s -w -X main.version=$(VERSION)"
 GOBUILD_FLAGS=-trimpath
 DIST_DIR=dist
 CHECKSUM_FILE=$(DIST_DIR)/checksums.txt
+DOCKER_ARCH ?= amd64
 
 # UPX compression (skip for macOS - not supported)
 USE_UPX ?= true
@@ -32,6 +33,7 @@ help:
 	@echo "  build-darwin     Build for macOS (amd64, arm64)"
 	@echo "  build-windows    Build for Windows (amd64, arm64)"
 	@echo "  build-all        Build for all platforms and architectures"
+	@echo "  build-docker-image Build rootfs tarball for docker/podman import"
 	@echo ""
 	@echo "Distribution targets:"
 	@echo "  dist             Build all distribution packages"
@@ -201,3 +203,25 @@ dist: dist-linux dist-darwin dist-windows checksums
 # Show version
 version:
 	@echo $(VERSION)
+
+# Build a minimal rootfs tarball suitable for docker/podman import
+build-docker-image: build
+	@echo "Building statically linked agentbusybox binary for Linux ($(DOCKER_ARCH))..."
+	@mkdir -p bin
+	CGO_ENABLED=0 GOOS=linux GOARCH=$(DOCKER_ARCH) go build $(GOBUILD_FLAGS) $(LDFLAGS) -o bin/$(BINARY_NAME)-linux-static .
+	@echo "Compressing static Linux binary with UPX..."
+	$(UPX_CMD) bin/$(BINARY_NAME)-linux-static
+	@echo "Generating rootfs tarball..."
+	@rm -f bin/rootfs.tar.gz
+	./bin/$(BINARY_NAME) rootfs bin/rootfs.tar.gz --tar.gz --src bin/$(BINARY_NAME)-linux-static
+	@echo ""
+	@echo "=========================================="
+	@echo "Docker-ready rootfs tarball built successfully!"
+	@echo "Location: bin/rootfs.tar.gz"
+	@echo ""
+	@echo "To import this into Docker as an image:"
+	@echo "  docker import bin/rootfs.tar.gz agentbusybox:latest"
+	@echo ""
+	@echo "To import this into Podman as an image:"
+	@echo "  podman import bin/rootfs.tar.gz agentbusybox:latest"
+	@echo "=========================================="

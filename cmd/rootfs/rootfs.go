@@ -25,6 +25,7 @@ func runRootfs(args []string) int {
 	format := "dir" // dir, tar, tar.gz
 	binDir := "bin" // bin or busybox
 	minimal := false
+	srcBin := ""
 
 	for i := 1; i < len(args); i++ {
 		a := args[i]
@@ -40,6 +41,11 @@ func runRootfs(args []string) int {
 				i++
 				binDir = args[i]
 			}
+		case "--src", "--binary":
+			if i+1 < len(args) {
+				i++
+				srcBin = args[i]
+			}
 		default:
 			if !strings.HasPrefix(a, "-") {
 				outputDir = a
@@ -48,9 +54,13 @@ func runRootfs(args []string) int {
 	}
 
 	// Build self path
-	selfPath, err := os.Executable()
-	if err != nil {
-		selfPath = "agentbusybox"
+	selfPath := srcBin
+	if selfPath == "" {
+		var err error
+		selfPath, err = os.Executable()
+		if err != nil {
+			selfPath = "agentbusybox"
+		}
 	}
 
 	fmt.Fprintf(os.Stderr, "Creating rootfs in %s (format: %s)...\n", outputDir, format)

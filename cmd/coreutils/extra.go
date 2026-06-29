@@ -821,13 +821,13 @@ func init() {
 
 // utmpRecord represents a Linux utmp entry (384 bytes)
 type utmpRecord struct {
-	Type   int16
-	Pid    int32
-	Line   [32]byte
-	Id     [4]byte
-	User   [32]byte
-	Host   [256]byte
-	Exit   struct {
+	Type int16
+	Pid  int32
+	Line [32]byte
+	Id   [4]byte
+	User [32]byte
+	Host [256]byte
+	Exit struct {
 		Termination int16
 		Exit        int16
 	}

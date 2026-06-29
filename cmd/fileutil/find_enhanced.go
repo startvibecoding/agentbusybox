@@ -111,9 +111,10 @@ func hasAction(expr *findExpr) bool {
 
 // parseFindExpr parses find command-line arguments into an expression tree
 // Grammar:
-//   expr     = andExpr ( -o andExpr )*
-//   andExpr  = unaryExpr ( (-a)? unaryExpr )*
-//   unaryExpr = ( -not | ! ) unaryExpr | atom | ( expr )
+//
+//	expr     = andExpr ( -o andExpr )*
+//	andExpr  = unaryExpr ( (-a)? unaryExpr )*
+//	unaryExpr = ( -not | ! ) unaryExpr | atom | ( expr )
 func parseFindExpr(args []string) *findExpr {
 	pos := 0
 	expr := parseOrExpr(args, &pos)

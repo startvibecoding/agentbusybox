@@ -899,8 +899,8 @@ func runTsort(args []string) int {
 }
 
 func runOd(args []string) int {
-	radix := "o" // o=octal, x=hex, d=decimal, n=none
-	addrFmt := "o" // -A: o=octal, x=hex, d=decimal, n=none
+	radix := "o"     // o=octal, x=hex, d=decimal, n=none
+	addrFmt := "o"   // -A: o=octal, x=hex, d=decimal, n=none
 	typeSpec := "o2" // -t type
 	skipBytes := 0   // -j
 	maxBytes := -1   // -N
@@ -1458,7 +1458,7 @@ func runInstall(args []string) int {
 	mkdirLead := false // -D
 	preserve := false  // -p
 	strip := false     // -s
-	targetDir := ""   // -t DIR
+	targetDir := ""    // -t DIR
 	files := []string{}
 
 	i := 1

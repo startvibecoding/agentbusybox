@@ -21,7 +21,7 @@ func init() {
 
 func runStat(args []string) int {
 	files := []string{}
-	format := "" // -c FORMAT
+	format := ""   // -c FORMAT
 	follow := true // -L (follow symlinks, default)
 	terse := false // -t (terse)
 

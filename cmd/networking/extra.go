@@ -943,11 +943,11 @@ func runDnsd(args []string) int {
 		resp[6] = 0
 		resp[7] = 1
 		// Add answer: A record pointing to 127.0.0.1
-		resp = append(resp, 0xc0, 0x0c) // pointer to name
-		resp = append(resp, 0, 1)        // type A
-		resp = append(resp, 0, 1)        // class IN
-		resp = append(resp, 0, 0, 0, 60) // TTL 60s
-		resp = append(resp, 0, 4)        // rdlength 4
+		resp = append(resp, 0xc0, 0x0c)   // pointer to name
+		resp = append(resp, 0, 1)         // type A
+		resp = append(resp, 0, 1)         // class IN
+		resp = append(resp, 0, 0, 0, 60)  // TTL 60s
+		resp = append(resp, 0, 4)         // rdlength 4
 		resp = append(resp, 127, 0, 0, 1) // 127.0.0.1
 		conn.WriteToUDP(resp, addr)
 	}
@@ -1074,7 +1074,7 @@ func runSslClient(args []string) int {
 		host = host[:idx]
 	}
 
-	conn, err := tls.DialWithDialer(&net.Dialer{Timeout: 10*time.Second}, "tcp", host+":"+port, nil)
+	conn, err := tls.DialWithDialer(&net.Dialer{Timeout: 10 * time.Second}, "tcp", host+":"+port, nil)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ssl_client: %v\n", err)
 		return 1

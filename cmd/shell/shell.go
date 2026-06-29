@@ -5,9 +5,19 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/agentbusybox/pkg/applet"
+)
+
+var (
+	lastExitCode     int = 0
+	positionalParams []string
+	shellName        string            = "sh"
+	shellVars        map[string]string = make(map[string]string)
+	commandHistory   []string
 )
 
 func init() {
@@ -19,11 +29,16 @@ func init() {
 }
 
 func runSh(args []string) int {
+	if len(args) > 0 {
+		shellName = args[0]
+	}
 	scriptFile := ""
 	command := ""
 	interactive := true
+	var scriptArgs []string
 
-	for _, a := range args[1:] {
+	for i := 1; i < len(args); i++ {
+		a := args[i]
 		if a == "-c" {
 			interactive = false
 			continue
@@ -32,13 +47,17 @@ func runSh(args []string) int {
 			if !interactive {
 				command = a
 			} else {
-				scriptFile = a
+				if scriptFile == "" {
+					scriptFile = a
+					scriptArgs = args[i+1:]
+					break
+				}
 			}
 		}
 	}
 
 	if scriptFile != "" {
-		return runScript(scriptFile)
+		return runScriptWithArgs(scriptFile, scriptArgs)
 	}
 	if command != "" {
 		return runCommand(command)
@@ -47,6 +66,16 @@ func runSh(args []string) int {
 }
 
 func runScript(path string) int {
+	return runScriptWithArgs(path, nil)
+}
+
+func runScriptWithArgs(path string, args []string) int {
+	oldParams := positionalParams
+	positionalParams = args
+	defer func() {
+		positionalParams = oldParams
+	}()
+
 	f, err := os.Open(path)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "sh: %s: %v\n", path, err)
@@ -71,91 +100,218 @@ func runCommand(cmd string) int {
 }
 
 func runInteractive() int {
-	reader := bufio.NewReader(os.Stdin)
-	for {
-		dir, _ := os.Getwd()
-		if len(dir) > 30 {
-			dir = "..." + dir[len(dir)-27:]
-		}
-		fmt.Printf("%s$ ", dir)
+	return runInteractivePlatform()
+}
 
-		line, err := reader.ReadString('\n')
-		if err != nil {
-			break
+type commandPart struct {
+	cmd string
+	op  string // "", ";", "&&", "||"
+}
+
+func parseAndOr(line string) []commandPart {
+	var parts []commandPart
+	current := ""
+	inSingle, inDouble := false, false
+	i := 0
+	for i < len(line) {
+		ch := line[i]
+		switch {
+		case ch == '\'' && !inDouble:
+			inSingle = !inSingle
+			current += string(ch)
+			i++
+		case ch == '"' && !inSingle:
+			inDouble = !inDouble
+			current += string(ch)
+			i++
+		case !inSingle && !inDouble && i+1 < len(line) && line[i:i+2] == "&&":
+			parts = append(parts, commandPart{cmd: strings.TrimSpace(current), op: "&&"})
+			current = ""
+			i += 2
+		case !inSingle && !inDouble && i+1 < len(line) && line[i:i+2] == "||":
+			parts = append(parts, commandPart{cmd: strings.TrimSpace(current), op: "||"})
+			current = ""
+			i += 2
+		case !inSingle && !inDouble && ch == ';':
+			parts = append(parts, commandPart{cmd: strings.TrimSpace(current), op: ";"})
+			current = ""
+			i++
+		default:
+			current += string(ch)
+			i++
 		}
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		if line == "exit" {
-			break
-		}
-		executeLine(line)
 	}
-	return 0
+	if current != "" {
+		parts = append(parts, commandPart{cmd: strings.TrimSpace(current), op: ""})
+	}
+	return parts
 }
 
 func executeLine(line string) int {
-	// Handle variable expansion
+	parts := parseAndOr(line)
+	if len(parts) == 0 {
+		return 0
+	}
+
+	exitCode := 0
+	skip := false
+
+	for i, part := range parts {
+		if skip {
+			prevOp := parts[i-1].op
+			if prevOp == ";" {
+				skip = false
+			} else if prevOp == "&&" && exitCode == 0 {
+				skip = false
+			} else if prevOp == "||" && exitCode != 0 {
+				skip = false
+			}
+		}
+
+		if !skip {
+			if part.cmd != "" {
+				exitCode = executeSinglePipeline(part.cmd)
+				lastExitCode = exitCode
+			}
+		}
+
+		if part.op == "&&" && exitCode != 0 {
+			skip = true
+		} else if part.op == "||" && exitCode == 0 {
+			skip = true
+		} else {
+			skip = false
+		}
+	}
+
+	return exitCode
+}
+
+func executeSinglePipeline(line string) int {
 	line = expandVars(line)
 
-	// Handle pipes
 	if strings.Contains(line, "|") {
 		return executePipe(line)
 	}
 
-	// Handle redirection
 	if strings.Contains(line, ">") || strings.Contains(line, "<") {
 		return executeRedirect(line)
 	}
 
-	// Parse command and arguments
 	args := parseArgs(line)
 	if len(args) == 0 {
 		return 0
 	}
 
-	// Handle built-in commands
-	switch args[0] {
+	return executeSingleCommand(args)
+}
+
+func prepareCmd(name string, args []string) *exec.Cmd {
+	if applet.Get(name) != nil {
+		self, err := os.Executable()
+		if err != nil {
+			self = "/proc/self/exe"
+		}
+		fullArgs := append([]string{name}, args...)
+		cmd := exec.Command(self, fullArgs...)
+		return cmd
+	}
+	return exec.Command(name, args...)
+}
+
+func isValidVarName(s string) bool {
+	if len(s) == 0 {
+		return false
+	}
+	first := s[0]
+	if !((first >= 'a' && first <= 'z') || (first >= 'A' && first <= 'Z') || first == '_') {
+		return false
+	}
+	for i := 1; i < len(s); i++ {
+		ch := s[i]
+		if !((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '_') {
+			return false
+		}
+	}
+	return true
+}
+
+func executeSingleCommand(args []string) int {
+	assignments := []string{}
+	cmdIdx := 0
+	for i, arg := range args {
+		if idx := strings.IndexByte(arg, '='); idx > 0 {
+			name := arg[:idx]
+			if isValidVarName(name) {
+				assignments = append(assignments, arg)
+				cmdIdx = i + 1
+				continue
+			}
+		}
+		break
+	}
+
+	if cmdIdx == len(args) {
+		for _, assoc := range assignments {
+			parts := strings.SplitN(assoc, "=", 2)
+			name, val := parts[0], parts[1]
+			shellVars[name] = val
+			if _, exists := os.LookupEnv(name); exists {
+				os.Setenv(name, val)
+			}
+		}
+		return 0
+	}
+
+	cmdArgs := args[cmdIdx:]
+
+	switch cmdArgs[0] {
 	case "cd":
-		return builtinCd(args)
+		return builtinCd(cmdArgs)
 	case "export":
-		return builtinExport(args)
+		return builtinExport(cmdArgs)
 	case "set":
-		return builtinSet(args)
+		return builtinSet(cmdArgs)
 	case "unset":
-		return builtinUnset(args)
+		return builtinUnset(cmdArgs)
 	case "echo":
-		return builtinEcho(args)
+		return builtinEcho(cmdArgs)
 	case "read":
-		return builtinRead(args)
+		return builtinRead(cmdArgs)
+	case "pwd":
+		return builtinPwd(cmdArgs)
+	case "history":
+		return builtinHistory(cmdArgs)
 	case "source", ".":
-		if len(args) > 1 {
-			return runScript(args[1])
+		if len(cmdArgs) > 1 {
+			return runScript(cmdArgs[1])
 		}
 		return 0
 	case "type":
-		return builtinType(args)
+		return builtinType(cmdArgs)
 	case "alias":
-		return builtinAlias(args)
+		return builtinAlias(cmdArgs)
 	case "unalias":
-		return builtinUnalias(args)
+		return builtinUnalias(cmdArgs)
 	case "trap":
-		return builtinTrap(args)
+		return builtinTrap(cmdArgs)
 	case "shift":
-		return builtinShift(args)
+		return builtinShift(cmdArgs)
 	case "exit":
 		code := 0
-		if len(args) > 1 {
-			fmt.Sscanf(args[1], "%d", &code)
+		if len(cmdArgs) > 1 {
+			fmt.Sscanf(cmdArgs[1], "%d", &code)
 		}
 		os.Exit(code)
 	case "exec":
-		if len(args) > 1 {
-			cmd := exec.Command(args[1], args[2:]...)
+		if len(cmdArgs) > 1 {
+			cmd := prepareCmd(cmdArgs[1], cmdArgs[2:])
 			cmd.Stdin = os.Stdin
 			cmd.Stdout = os.Stdout
 			cmd.Stderr = os.Stderr
+			if len(assignments) > 0 {
+				cmd.Env = append(os.Environ(), assignments...)
+			}
 			if err := cmd.Run(); err != nil {
 				if exitErr, ok := err.(*exec.ExitError); ok {
 					return exitErr.ExitCode()
@@ -166,11 +322,15 @@ func executeLine(line string) int {
 		return 0
 	}
 
-	// Execute external command
-	cmd := exec.Command(args[0], args[1:]...)
+	cmd := prepareCmd(cmdArgs[0], cmdArgs[1:])
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
+
+	if len(assignments) > 0 {
+		cmd.Env = append(os.Environ(), assignments...)
+	}
+
 	if err := cmd.Run(); err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			return exitErr.ExitCode()
@@ -190,18 +350,50 @@ func expandVars(line string) string {
 				end := strings.IndexByte(line[i:], '}')
 				if end >= 0 {
 					varName := line[i+1 : i+end]
-					result += os.Getenv(varName)
+					result += expandSingleVar(varName)
 					i += end + 1
 					continue
 				}
 			}
-			// Simple variable
+
+			ch := line[i]
+			if ch == '?' {
+				result += strconv.Itoa(lastExitCode)
+				i++
+				continue
+			}
+			if ch == '$' {
+				result += strconv.Itoa(os.Getpid())
+				i++
+				continue
+			}
+			if ch == '#' {
+				result += strconv.Itoa(len(positionalParams))
+				i++
+				continue
+			}
+			if ch == '*' || ch == '@' {
+				result += strings.Join(positionalParams, " ")
+				i++
+				continue
+			}
+			if ch >= '0' && ch <= '9' {
+				idx := int(ch - '0')
+				if idx == 0 {
+					result += shellName
+				} else if idx-1 < len(positionalParams) {
+					result += positionalParams[idx-1]
+				}
+				i++
+				continue
+			}
+
 			end := i
 			for end < len(line) && (isAlphaNum(line[end]) || line[end] == '_') {
 				end++
 			}
 			varName := line[i:end]
-			result += os.Getenv(varName)
+			result += expandSingleVar(varName)
 			i = end
 		} else if line[i] == '~' && (i == 0 || line[i-1] == ' ') {
 			result += os.Getenv("HOME")
@@ -212,6 +404,16 @@ func expandVars(line string) string {
 		}
 	}
 	return result
+}
+
+func expandSingleVar(name string) string {
+	if val, exists := os.LookupEnv(name); exists {
+		return val
+	}
+	if val, exists := shellVars[name]; exists {
+		return val
+	}
+	return ""
 }
 
 func isAlphaNum(c byte) bool {
@@ -248,7 +450,7 @@ func parseArgs(line string) []string {
 func executePipe(line string) int {
 	commands := strings.Split(line, "|")
 	if len(commands) < 2 {
-		return executeLine(strings.TrimSpace(commands[0]))
+		return executeSinglePipeline(strings.TrimSpace(commands[0]))
 	}
 
 	var prevOutput []byte
@@ -261,7 +463,7 @@ func executePipe(line string) int {
 			continue
 		}
 
-		cmd := exec.Command(args[0], args[1:]...)
+		cmd := prepareCmd(args[0], args[1:])
 		if i > 0 {
 			cmd.Stdin = strings.NewReader(string(prevOutput))
 		} else {
@@ -293,7 +495,6 @@ func executePipe(line string) int {
 }
 
 func executeRedirect(line string) int {
-	// Simple redirect handling
 	if strings.Contains(line, ">>") {
 		parts := strings.SplitN(line, ">>", 2)
 		cmdStr := strings.TrimSpace(parts[0])
@@ -310,7 +511,7 @@ func executeRedirect(line string) int {
 		}
 		defer f.Close()
 
-		cmd := exec.Command(args[0], args[1:]...)
+		cmd := prepareCmd(args[0], args[1:])
 		cmd.Stdin = os.Stdin
 		cmd.Stdout = f
 		cmd.Stderr = os.Stderr
@@ -335,7 +536,7 @@ func executeRedirect(line string) int {
 		}
 		defer f.Close()
 
-		cmd := exec.Command(args[0], args[1:]...)
+		cmd := prepareCmd(args[0], args[1:])
 		cmd.Stdin = os.Stdin
 		cmd.Stdout = f
 		cmd.Stderr = os.Stderr
@@ -360,7 +561,7 @@ func executeRedirect(line string) int {
 		}
 		defer f.Close()
 
-		cmd := exec.Command(args[0], args[1:]...)
+		cmd := prepareCmd(args[0], args[1:])
 		cmd.Stdin = f
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
@@ -369,7 +570,7 @@ func executeRedirect(line string) int {
 		}
 		return 0
 	}
-	return executeLine(strings.TrimSpace(line))
+	return executeSinglePipeline(strings.TrimSpace(line))
 }
 
 func builtinCd(args []string) int {
@@ -391,10 +592,25 @@ func builtinCd(args []string) int {
 }
 
 func builtinExport(args []string) int {
+	if len(args) == 1 {
+		for _, e := range os.Environ() {
+			fmt.Println("export " + e)
+		}
+		return 0
+	}
 	for _, a := range args[1:] {
 		parts := strings.SplitN(a, "=", 2)
 		if len(parts) == 2 {
-			os.Setenv(parts[0], parts[1])
+			name, val := parts[0], parts[1]
+			shellVars[name] = val
+			os.Setenv(name, val)
+		} else {
+			name := parts[0]
+			if val, exists := shellVars[name]; exists {
+				os.Setenv(name, val)
+			} else {
+				os.Setenv(name, "")
+			}
 		}
 	}
 	return 0
@@ -404,12 +620,18 @@ func builtinSet(args []string) int {
 	for _, e := range os.Environ() {
 		fmt.Println(e)
 	}
+	for k, v := range shellVars {
+		if _, exists := os.LookupEnv(k); !exists {
+			fmt.Printf("%s=%s\n", k, v)
+		}
+	}
 	return 0
 }
 
 func builtinUnset(args []string) int {
 	for _, a := range args[1:] {
 		os.Unsetenv(a)
+		delete(shellVars, a)
 	}
 	return 0
 }
@@ -431,14 +653,64 @@ func builtinRead(args []string) int {
 		return 1
 	}
 	line = strings.TrimRight(line, "\n")
+	shellVars[varName] = line
 	os.Setenv(varName, line)
 	return 0
 }
 
+func builtinPwd(args []string) int {
+	dir, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "pwd: %v\n", err)
+		return 1
+	}
+	fmt.Println(dir)
+	return 0
+}
+
+func builtinHistory(args []string) int {
+	for i, cmd := range commandHistory {
+		fmt.Printf("%5d  %s\n", i+1, cmd)
+	}
+	return 0
+}
+
+func loadHistory() {
+	home := os.Getenv("HOME")
+	if home == "" {
+		return
+	}
+	histFile := filepath.Join(home, ".ash_history")
+	data, err := os.ReadFile(histFile)
+	if err != nil {
+		return
+	}
+	lines := strings.Split(string(data), "\n")
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed != "" {
+			commandHistory = append(commandHistory, trimmed)
+		}
+	}
+}
+
+func saveHistoryLine(line string) {
+	home := os.Getenv("HOME")
+	if home == "" {
+		return
+	}
+	histFile := filepath.Join(home, ".ash_history")
+	f, err := os.OpenFile(histFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	f.WriteString(line + "\n")
+}
+
 func builtinType(args []string) int {
 	for _, name := range args[1:] {
-		// Check builtins
-		builtins := []string{"cd", "export", "set", "unset", "echo", "read", "source", ".", "type", "alias", "unalias", "trap", "shift", "exit", "exec"}
+		builtins := []string{"cd", "export", "set", "unset", "echo", "read", "pwd", "history", "source", ".", "type", "alias", "unalias", "trap", "shift", "exit", "exec"}
 		isBuiltin := false
 		for _, b := range builtins {
 			if b == name {
@@ -478,7 +750,6 @@ func builtinShift(args []string) int {
 }
 
 func init() {
-	// Register some more applets that don't fit elsewhere
 	applet.Register(&applet.Applet{Name: "shuf", Short: "Generate random permutations", Func: runShuf})
 }
 
@@ -523,9 +794,8 @@ func runShuf(args []string) int {
 			fmt.Println(input[i%len(input)])
 		}
 	} else {
-		// Fisher-Yates shuffle
 		for i := len(input) - 1; i > 0; i-- {
-			j := i // simplified - not truly random
+			j := i
 			input[i], input[j] = input[j], input[i]
 		}
 		for i := 0; i < count && i < len(input); i++ {
@@ -546,7 +816,6 @@ func runSeq(args []string) int {
 		return 1
 	}
 
-	// Parse flags
 	cleaned := []string{}
 	for i := 0; i < len(args); i++ {
 		if args[i] == "-s" && i+1 < len(args) {

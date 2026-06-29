@@ -593,9 +593,9 @@ func init() {
 
 func runStrings(args []string) int {
 	minLen := 4
-	printName := false    // -f
-	printOffset := false  // -o
-	radix := "o"          // -t o|d|x
+	printName := false   // -f
+	printOffset := false // -o
+	radix := "o"         // -t o|d|x
 	files := []string{}
 
 	i := 1
@@ -834,8 +834,8 @@ func init() {
 }
 
 func runCmp(args []string) int {
-	verbose := false   // -l
-	silent := false    // -s
+	verbose := false     // -l
+	silent := false      // -s
 	maxBytes := int64(0) // -n COUNT
 	files := []string{}
 
@@ -956,13 +956,13 @@ func init() {
 }
 
 func runXargs(args []string) int {
-	maxArgs := 0       // -n NUM
-	maxChars := 0       // -s NUM
-	verbose := false    // -t
-	nullTerm := false   // -0
-	replStr := ""       // -I STR
-	eofStr := ""        // -E STR
-	delimiter := ""     // -d DELIM
+	maxArgs := 0      // -n NUM
+	maxChars := 0     // -s NUM
+	verbose := false  // -t
+	nullTerm := false // -0
+	replStr := ""     // -I STR
+	eofStr := ""      // -E STR
+	delimiter := ""   // -d DELIM
 	command := ""
 	commandArgs := []string{}
 

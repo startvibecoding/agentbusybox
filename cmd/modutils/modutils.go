@@ -92,7 +92,7 @@ func runRmmod(args []string) int {
 	module := args[1]
 	// delete_module syscall (requires root)
 	_, _, errno := syscall.RawSyscall(176, // __NR_delete_module
-		uintptr(unsafe.Pointer(&[]byte(module+"\x00")[0])),
+		uintptr(unsafe.Pointer(&[]byte(module + "\x00")[0])),
 		0, 0)
 	if errno != 0 {
 		fmt.Fprintf(os.Stderr, "rmmod: %s: %v\n", module, errno)
@@ -156,7 +156,7 @@ func runModprobe(args []string) int {
 		for i := len(modules) - 1; i >= 0; i-- {
 			modName := modules[i]
 			_, _, errno := syscall.RawSyscall(176, // __NR_delete_module
-				uintptr(unsafe.Pointer(&[]byte(modName+"\x00")[0])),
+				uintptr(unsafe.Pointer(&[]byte(modName + "\x00")[0])),
 				0, 0)
 			if errno != 0 && !quiet {
 				fmt.Fprintf(os.Stderr, "modprobe: %s: %v\n", modName, errno)

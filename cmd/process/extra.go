@@ -125,7 +125,7 @@ func runLsof(args []string) int {
 		return 1
 	}
 
-	fmt.Printf("%-8s %5s %4s %-10s %10s %8s %s\n", "COMMAND", "PID", "FD", "TYPE", "DEVICE", "SIZE", "NODE", "NAME")
+	fmt.Printf("%-8s %5s %4s %-10s %10s %8s %8s %s\n", "COMMAND", "PID", "FD", "TYPE", "DEVICE", "SIZE", "NODE", "NAME")
 	for _, entry := range entries {
 		pid, err := strconv.Atoi(entry.Name())
 		if err != nil {
@@ -187,7 +187,7 @@ func runLsof(args []string) int {
 				}
 			}
 
-			fmt.Printf("%-8s %5s %4s %-10s %10s %8s %8s %s\n",
+			fmt.Printf("%-8s %5d %4s %-10s %10s %8s %8s %s\n",
 				cmdName, pid, fdNum, fdType, device, size, node, link)
 		}
 	}
