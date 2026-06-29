@@ -3,9 +3,9 @@
 ## Project Snapshot
 
 - **Repo:** https://github.com/startvibecoding/agentbusybox.git
-- **Language:** Go 1.21 (module `github.com/agentbusybox`)
+- **Language:** Go 1.26 (module `github.com/agentbusybox`)
 - **Purpose:** A full-featured BusyBox implementation in Go — a single binary containing ~389 Unix/Linux utilities, including rootfs generation for containers. Invoked as `agentbusybox <applet> [args...]` or via symlinks.
-- **Dependencies:** `golang.org/x/sys`, `golang.org/x/net` (indirect)
+- **Dependencies:** `golang.org/x/sys`, `github.com/startvibecoding/go-fd` (indirect), `github.com/startvibecoding/go-ripgrep` (indirect)
 - **Platforms:** Linux (primary), macOS, Windows
 
 ## Important Directories
@@ -18,6 +18,13 @@
 | `cmd/textproc/` | Text processing: `grep`, `sed`, `diff`, `cmp`, `strings`, `xargs` |
 | `cmd/fileutil/` | File utilities: `find`, `stat`, `du`, `df`, `ln`, `chmod`, `chown`, `chgrp`, `which`, `file`, `tree`, `mktemp`, `readlink`, `realpath` |
 | `cmd/archival/` | Archive/compression: `tar`, `gzip`, `gunzip`, `bzip2`, `bunzip2`, `lzma`, `xz`, `cpio`, `ar`, `zip`, `unzip`, `dpkg`, `rpm` |
+| `cmd/busybox/` | BusyBox compatibility dispatcher: `busybox` |
+| `cmd/debianutils/` | Debian utilities: `run-parts`, `start-stop-daemon`, `pipe_progress` |
+| `cmd/fastutil/` | Fast utilities: `fd` (uses `go-fd` and `go-ripgrep` libraries) |
+| `cmd/klibc/` | klibc utilities: `nuke`, `resume`, `run-init` |
+| `cmd/mailutils/` | Mail utilities: `makemime`, `popmaildir`, `reformime`, `sendmail` |
+| `cmd/printutils/` | Print utilities: `lpd`, `lpq`, `lpr` |
+| `cmd/selinux/` | SELinux utilities: `chcon`, `getenforce`, `getsebool`, `load_policy`, `matchpathcon`, `restorecon`, `runcon`, `selinuxenabled`, `sestatus`, `setenforce`, `setfiles`, `setsebool` |
 | `cmd/networking/` | Network tools: `wget`, `curl`, `ping`, `ping6`, `nc`, `nslookup`, `ifconfig`, `ip` (addr/link/route/rule/neigh), `ipcalc`, `route`, `netstat`, `telnet`, `httpd`, `whois`, `ftpget`, `ftpd`, `tcpsvd`, `brctl`, `ntpd` |
 | `cmd/process/` | Process management: `ps`, `kill`, `top`, `uptime`, `free`, `pgrep`, `pkill`, `pmap`, `pidof`, `vmstat`, `fuser`, `iostat`, `lsof`, `pstree`, `pwdx`, `mpstat`, `sysctl`, `killall5` |
 | `cmd/shell/` | Shell: `sh`/`ash`/`hush` (interactive + script), `printf`, `shuf` |
@@ -152,7 +159,7 @@ See `CHECKLIST.md` for the complete flag parity tracking list.
 - **Imports:** Group as: stdlib, then external (`golang.org/x/...`), then internal (`github.com/agentbusybox/...`). `goimports` handles this.
 - **Naming:** Follow Go conventions — exported names are PascalCase, unexported are camelCase. Package names are short, lowercase, single-word.
 - **Error handling:** Print to stderr and return non-zero exit code. Don't use `log.Fatal` in applets (it calls `os.Exit` which skips deferred cleanup).
-- **No external dependencies** beyond `golang.org/x/sys` and `golang.org/x/net`. Do not add new dependencies without strong justification.
+- **No external dependencies** beyond `golang.org/x/sys`, `github.com/startvibecoding/go-fd`, and `github.com/startvibecoding/go-ripgrep`. Do not add new dependencies without strong justification.
 - **Cross-platform:** Use `pkg/platform` helpers and `runtime.GOOS` checks. Many applets delegate to system commands on non-Linux platforms.
 - **Build flags:** The Makefile uses `-trimpath` and ldflags `-s -w` for stripped, reproducible binaries. UPX compression is applied where available.
 - **Tests:** Place test files alongside source (`*_test.go`). Use `go test -v -race ./...`.
