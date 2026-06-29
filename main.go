@@ -10,6 +10,7 @@ import (
 	_ "github.com/agentbusybox/cmd/debianutils"
 	_ "github.com/agentbusybox/cmd/e2fsprogs"
 	_ "github.com/agentbusybox/cmd/editors"
+	_ "github.com/agentbusybox/cmd/fastutil"
 	_ "github.com/agentbusybox/cmd/fileutil"
 	_ "github.com/agentbusybox/cmd/findutils"
 	_ "github.com/agentbusybox/cmd/init"
