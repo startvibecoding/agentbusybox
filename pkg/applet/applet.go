@@ -14,7 +14,8 @@ type Applet struct {
 	Short  string
 	Func   func(args []string) int
 	NoFork bool // if true, run in-process (not in a subprocess)
-	Usage  string
+	Usage    string // optional custom usage line, e.g. "ls [OPTIONS] [FILE...]"
+	LongHelp string // detailed help text with option descriptions
 }
 
 var (
@@ -83,6 +84,10 @@ func Dispatch() int {
 
 	// Check if invoked directly as an applet (via symlink/copy)
 	if a := Get(lowerName); a != nil {
+		if containsHelp(os.Args) {
+			PrintHelp(progName, a.Usage, a.Short, a.LongHelp)
+			return 0
+		}
 		return a.Func(os.Args)
 	}
 
@@ -134,6 +139,12 @@ func dispatchBusybox(args []string) int {
 		return 1
 	}
 
+	// Handle --help for the target applet
+	if containsHelp(args) {
+		PrintHelp(appletName, a.Usage, a.Short, a.LongHelp)
+		return 0
+	}
+
 	return a.Func(args)
 }
 
@@ -182,3 +193,31 @@ func printVersion() {
 	fmt.Println("AgentBusyBox v0.1.0 (Go implementation)")
 }
 
+// containsHelp checks if --help appears in args before -- (end of options).
+// args[0] is expected to be the applet name.
+func containsHelp(args []string) bool {
+	for i := 1; i < len(args); i++ {
+		if args[i] == "--" {
+			return false
+		}
+		if args[i] == "--help" {
+			return true
+		}
+	}
+	return false
+}
+
+// PrintHelp prints formatted help information for an applet.
+// If usage is empty, a default usage line is generated from the applet name.
+func PrintHelp(appletName, usage, short, longHelp string) {
+	if usage == "" {
+		usage = appletName + " [OPTIONS] [ARGS...]"
+	}
+	fmt.Printf("Usage: %s\n\n", usage)
+	if short != "" {
+		fmt.Printf("%s\n\n", short)
+	}
+	if longHelp != "" {
+		fmt.Printf("Options:\n%s\n", longHelp)
+	}
+}

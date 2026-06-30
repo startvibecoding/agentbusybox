@@ -1,2 +1,8 @@
+github.com/startvibecoding/go-fd v0.0.4 h1:jwZnmTFFSKcQ3XIDC11/+cyUUg65p8eTeH0tWHc3uvY=
+github.com/startvibecoding/go-fd v0.0.4/go.mod h1:coDfZb2HSCZ52XD7W9W7vP5e3n/TGgrBbxvyxk8gUTQ=
+github.com/startvibecoding/go-ripgrep v0.0.4 h1:xSF3bKT7iowz2ygcKR9HwTZWhoNYPw6Bjlf24LW3z6w=
+github.com/startvibecoding/go-ripgrep v0.0.4/go.mod h1:oZyhr56KWcZHcHuCMRIs3qJDoMTwHj+yg6j1eNhiqJw=
 golang.org/x/sys v0.28.0 h1:Fksou7UEQUWlKvIdsqzJmUmCX3cZuD2+P3XyyzwMhlA=
 golang.org/x/sys v0.28.0/go.mod h1:/VUhepiaJMQUp4+oa/7Zr1D23ma6VTLIYjOOTFZPUcA=
+golang.org/x/sys v0.46.0 h1:noSf2Fq6F8DBgS+LysIkx7rIExoNHJsxOAtPp4rthXw=
+golang.org/x/sys v0.46.0/go.mod h1:4GL1E5IUh+htKOUEOaiffhrAeqysfVGipDYzABqnCmw=
