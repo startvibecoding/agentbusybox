@@ -94,11 +94,8 @@ func Dispatch() int {
 // dispatchBusybox handles "busybox [applet] [args...]" invocation.
 func dispatchBusybox(args []string) int {
 	if len(args) == 0 {
-		// No applet specified, show usage
-		printBanner()
-		fmt.Fprintf(os.Stderr, "\nUsage: busybox [applet] [args...]\n")
-		fmt.Fprintf(os.Stderr, "\nCurrently defined applets:\n")
-		List()
+		// No applet specified, show full help
+		printHelp()
 		return 0
 	}
 
@@ -110,11 +107,21 @@ func dispatchBusybox(args []string) int {
 		List()
 		return 0
 	case "--help", "-h":
-		printBanner()
-		fmt.Fprintf(os.Stderr, "\nUsage: busybox [applet] [args...]\n")
-		fmt.Fprintf(os.Stderr, "       busybox --list\n")
-		fmt.Fprintf(os.Stderr, "\nCurrently defined applets:\n")
-		List()
+		if len(args) > 1 {
+			// "busybox --help APPLET" -> delegate to applet's own help
+			a := Get(strings.ToLower(args[1]))
+			if a != nil {
+				if a.Usage != "" {
+					fmt.Println(a.Usage)
+					return 0
+				}
+				// Fall through: invoke applet with --help so it can print its own usage
+				return a.Func(args[1:])
+			}
+			fmt.Fprintf(os.Stderr, "busybox: unknown applet '%s'\n", args[1])
+			return 1
+		}
+		printHelp()
 		return 0
 	case "--version", "-v":
 		printVersion()
@@ -130,10 +137,48 @@ func dispatchBusybox(args []string) int {
 	return a.Func(args)
 }
 
+func printHelp() {
+	printBanner()
+	fmt.Fprintln(os.Stderr, " multi-call binary.")
+	fmt.Fprintln(os.Stderr)
+	fmt.Fprintln(os.Stderr, "Usage: busybox [function [arguments]...]")
+	fmt.Fprintln(os.Stderr, "   or: busybox --list")
+	fmt.Fprintln(os.Stderr, "   or: busybox --help [APPLET]")
+	fmt.Fprintln(os.Stderr, "   or: function [arguments]...")
+	fmt.Fprintln(os.Stderr)
+	fmt.Fprint(os.Stderr, "\tAgentBusyBox is a multi-call binary that combines many common Unix\n")
+	fmt.Fprint(os.Stderr, "\tutilities into a single executable.  Most people will create a\n")
+	fmt.Fprint(os.Stderr, "\tlink to busybox for each function they wish to use and BusyBox\n")
+	fmt.Fprint(os.Stderr, "\twill act like whatever function it was invoked as.\n")
+	fmt.Fprintln(os.Stderr)
+	fmt.Fprintln(os.Stderr, "Currently defined functions:")
+	printCompactList()
+}
+
+func printCompactList() {
+	names := Names()
+	col := 0
+	for i, n := range names {
+		name := n
+		if i > 0 {
+			fmt.Fprint(os.Stderr, ", ")
+			col += 2
+		}
+		if col+len(name) > 78 {
+			fmt.Fprint(os.Stderr, "\n\t")
+			col = 8
+		}
+		fmt.Fprint(os.Stderr, name)
+		col += len(name)
+	}
+	fmt.Fprintln(os.Stderr)
+}
+
 func printBanner() {
-	fmt.Fprintf(os.Stderr, "AgentBusyBox - A BusyBox implementation in Go\n")
+	fmt.Fprintf(os.Stderr, "AgentBusyBox v0.1.0 (Go implementation)")
 }
 
 func printVersion() {
 	fmt.Println("AgentBusyBox v0.1.0 (Go implementation)")
 }
+

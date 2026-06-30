@@ -17,6 +17,22 @@ func init() {
 		Name:  "rootfs",
 		Short: "Generate a minimal root filesystem",
 		Func:  runRootfs,
+		Usage: `Usage: rootfs [OPTIONS] [OUTPUT]
+
+Generate a minimal root filesystem for containers.
+
+Options:
+  -z            Output as tar.gz (shorthand for --tar.gz)
+  --tar         Output as uncompressed tar
+  --tar.gz      Output as gzip-compressed tar
+  --minimal     Create a minimal rootfs (fewer directories)
+  -b, --bin DIR Binary directory name (default: bin)
+  --src FILE    Path to agentbusybox binary (default: auto-detect)
+
+Examples:
+  rootfs ./myrootfs          Create rootfs directory
+  rootfs rootfs.tar.gz -z    Create tar.gz archive
+  rootfs --minimal ./rootfs  Create minimal rootfs`,
 	})
 }
 
@@ -30,6 +46,26 @@ func runRootfs(args []string) int {
 	for i := 1; i < len(args); i++ {
 		a := args[i]
 		switch a {
+		case "--help", "-h":
+			fmt.Println(`Usage: rootfs [OPTIONS] [OUTPUT]
+
+Generate a minimal root filesystem for containers.
+
+Options:
+  -z            Output as tar.gz (shorthand for --tar.gz)
+  --tar         Output as uncompressed tar
+  --tar.gz      Output as gzip-compressed tar
+  --minimal     Create a minimal rootfs (fewer directories)
+  -b, --bin DIR Binary directory name (default: bin)
+  --src FILE    Path to agentbusybox binary (default: auto-detect)
+
+Examples:
+  rootfs ./myrootfs          Create rootfs directory
+  rootfs rootfs.tar.gz -z    Create tar.gz archive
+  rootfs --minimal ./rootfs  Create minimal rootfs`)
+			return 0
+		case "-z":
+			format = "tar.gz"
 		case "--tar":
 			format = "tar"
 		case "--tar.gz", "--tgz":
