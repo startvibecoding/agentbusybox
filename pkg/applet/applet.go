@@ -10,10 +10,10 @@ import (
 
 // Applet represents a command that can be invoked via the busybox binary.
 type Applet struct {
-	Name   string
-	Short  string
-	Func   func(args []string) int
-	NoFork bool // if true, run in-process (not in a subprocess)
+	Name     string
+	Short    string
+	Func     func(args []string) int
+	NoFork   bool   // if true, run in-process (not in a subprocess)
 	Usage    string // optional custom usage line, e.g. "ls [OPTIONS] [FILE...]"
 	LongHelp string // detailed help text with option descriptions
 }

@@ -13,7 +13,7 @@ func init() {
 
 func runEcho(args []string) int {
 	noNewline := false
-	enableEscape := true
+	enableEscape := false // POSIX: default is no escape interpretation
 	escapeFlag := false
 	rawFlag := false
 

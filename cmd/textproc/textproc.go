@@ -551,7 +551,8 @@ func applySedExprN(line, expr string, lineNum, totalLines int) string {
 		matched := false
 		if addr == "$" {
 			matched = lineNum == totalLines
-		} else if n := 0; len(addr) > 0 {
+		} else if isNumeric(addr) {
+			var n int
 			fmt.Sscanf(addr, "%d", &n)
 			matched = lineNum == n
 		} else {
@@ -585,6 +586,18 @@ func applySedExprN(line, expr string, lineNum, totalLines int) string {
 		fmt.Println(line)
 	}
 	return line
+}
+
+func isNumeric(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func init() {
@@ -770,12 +783,12 @@ func runDiff(args []string) int {
 
 	for k < len(lcs) {
 		for i < len(lines1) && lines1[i] != lcs[k] {
-			fmt.Printf("- %s\n", lines1[i])
+			fmt.Printf("< %s\n", lines1[i])
 			i++
 			exitCode = 1
 		}
 		for j < len(lines2) && lines2[j] != lcs[k] {
-			fmt.Printf("+ %s\n", lines2[j])
+			fmt.Printf("> %s\n", lines2[j])
 			j++
 			exitCode = 1
 		}
@@ -784,11 +797,11 @@ func runDiff(args []string) int {
 		k++
 	}
 	for ; i < len(lines1); i++ {
-		fmt.Printf("- %s\n", lines1[i])
+		fmt.Printf("< %s\n", lines1[i])
 		exitCode = 1
 	}
 	for ; j < len(lines2); j++ {
-		fmt.Printf("+ %s\n", lines2[j])
+		fmt.Printf("> %s\n", lines2[j])
 		exitCode = 1
 	}
 	return exitCode

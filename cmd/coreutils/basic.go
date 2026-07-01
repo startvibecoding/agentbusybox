@@ -5,9 +5,11 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 	"text/tabwriter"
 	"time"
 
@@ -269,7 +271,7 @@ func lsFile(info os.FileInfo, name string, opts lsOpts) {
 	if opts.long {
 		fmt.Printf("%s %4d %s %s %8s %s ",
 			info.Mode().String(),
-			1, // link count
+			nlinkOf(info),
 			ownerName(info),
 			groupName(info),
 			formatSize(info.Size(), opts.human),
@@ -309,18 +311,39 @@ func formatSize(size int64, human bool) string {
 }
 
 func ownerName(info os.FileInfo) string {
-	_ = info
+	if stat, ok := info.Sys().(*syscall.Stat_t); ok {
+		u, err := user.LookupId(fmt.Sprintf("%d", stat.Uid))
+		if err == nil {
+			return u.Username
+		}
+		return fmt.Sprintf("%d", stat.Uid)
+	}
 	return fmt.Sprintf("%d", os.Getuid())
 }
 
 func groupName(info os.FileInfo) string {
-	_ = info
+	if stat, ok := info.Sys().(*syscall.Stat_t); ok {
+		g, err := user.LookupGroupId(fmt.Sprintf("%d", stat.Gid))
+		if err == nil {
+			return g.Name
+		}
+		return fmt.Sprintf("%d", stat.Gid)
+	}
 	return fmt.Sprintf("%d", os.Getgid())
 }
 
 func inodeOf(info os.FileInfo) uint64 {
-	// cross-platform inode (0 on non-unix)
+	if stat, ok := info.Sys().(*syscall.Stat_t); ok {
+		return stat.Ino
+	}
 	return 0
+}
+
+func nlinkOf(info os.FileInfo) uint64 {
+	if stat, ok := info.Sys().(*syscall.Stat_t); ok {
+		return uint64(stat.Nlink)
+	}
+	return 1
 }
 
 func init() {
@@ -480,13 +503,6 @@ func parseFloat(s string) float64 {
 	var f float64
 	fmt.Sscanf(s, "%f", &f)
 	return f
-}
-
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
 }
 
 func init() {

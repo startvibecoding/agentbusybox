@@ -166,7 +166,22 @@ See `CHECKLIST.md` for the complete flag parity tracking list.
 
 ## Agent Rules
 
-### 核心原则：纯 Go 实现，禁止 exec.Command
+### 核心原则一：POSIX 兼容性
+
+**所有命令的实现必须遵循 POSIX 标准行为。**
+
+- **默认行为符合 POSIX**: 命令的默认行为必须与 POSIX 规范一致。例如：
+  - `echo` 默认不解释转义序列（需要 `-e` 启用）
+  - `ls -l` 必须显示真实的 link count、owner/group 名称、inode
+  - `test` / `[` 必须支持 POSIX 规定的所有一元和二元测试
+  - `sed` 地址必须正确区分数字地址和模式地址
+  - `diff` 输出格式应遵循标准格式
+- **标志兼容**: 命令必须支持 POSIX 定义的标准标志（如 `ls -l`, `cat -n`, `grep -i` 等）
+- **退出码**: 命令退出码必须遵循 POSIX 惯例（0=成功，非0=错误）
+- **错误输出**: 错误信息必须输出到 stderr
+- **参考文档**: 实现时参考 [The Open Group Base Specifications](https://pubs.opengroup.org/onlinepubs/9699919799/) 和 BusyBox 行为
+
+### 核心原则二：纯 Go 实现，禁止 exec.Command
 
 **本项目的目标是创建一个完全独立的 Go 二进制文件，不依赖任何系统命令。**
 
