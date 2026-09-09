@@ -377,8 +377,8 @@ CONFIG_PLATFORM_MINGW32 := $(subst ",,$(CONFIG_PLATFORM_MINGW32))
 endif
 
 # Try various methods to get a more specific EXTRAVERSION, but only
-# for MINGW32 platform and if EXTRAVERSION is default '.git'
-ifeq ($(CONFIG_PLATFORM_MINGW32)$(EXTRAVERSION),y.git)
+# if EXTRAVERSION is default '.git'
+ifeq ($(EXTRAVERSION),.git)
 # Ask git: tag names are of the form "v<version>", e.g. "v1.38.1".
 # git describe gives "v1.38.1" on the tag itself and
 # "v1.38.1-12-gabc1234" after it.
