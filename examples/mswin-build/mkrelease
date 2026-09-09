@@ -92,7 +92,7 @@ do
 		VERSION="$GCCV; $CRTV"
 	fi
 	SOURCE_DATE_EPOCH=$(git log -1 --pretty=%ct) TZ=UTC0 \
-		make -j $(nproc) EXTRAVERSION="-`git describe --match=FRP`" MINGW_VER="$VERSION"
+		make -j $(nproc) EXTRAVERSION="-`git describe --match='v[0-9]*'`" MINGW_VER="$VERSION"
 	)
 done
 

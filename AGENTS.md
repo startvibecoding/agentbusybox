@@ -3,7 +3,7 @@
 ## 项目简介
 
 本项目是 **BusyBox for Windows**(busybox-w32),上游为 <https://github.com/rmyorston/busybox-w32>,
-基于上游 busybox 1.38.0.git 的 fork,核心目标是在 Microsoft Windows 上提供 BusyBox 功能。
+基于上游 busybox 1.38 的 fork(本 fork 版本号自 v1.38.1 起),核心目标是在 Microsoft Windows 上提供 BusyBox 功能。
 
 **本项目定位:提供给 AI agent 使用**(运行环境为 Windows)。因此已**精简掉 Linux 独占能力**:
 移除全部 Linux 内核/系统级 applet(内核模块、init/启动、SELinux、挂载/分区、网络配置、

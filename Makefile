@@ -1,6 +1,6 @@
 VERSION = 1
 PATCHLEVEL = 38
-SUBLEVEL = 0
+SUBLEVEL = 1
 EXTRAVERSION = .git
 NAME = Unnamed
 
@@ -379,14 +379,16 @@ endif
 # Try various methods to get a more specific EXTRAVERSION, but only
 # for MINGW32 platform and if EXTRAVERSION is default '.git'
 ifeq ($(CONFIG_PLATFORM_MINGW32)$(EXTRAVERSION),y.git)
-# Ask git
-extraversion := $(shell cd $(srctree) && git describe --match FRP 2>/dev/null)
+# Ask git: tag names are of the form "v<version>", e.g. "v1.38.1".
+# git describe gives "v1.38.1" on the tag itself and
+# "v1.38.1-12-gabc1234" after it.
+extraversion := $(shell cd $(srctree) && git describe --match 'v[0-9]*' 2>/dev/null)
 ifeq ($(strip $(extraversion)),)
-# That didn't work, look for a .frp_describe file
-extraversion := $(shell grep '^FRP-' $(srctree)/.frp_describe 2>/dev/null)
+# That didn't work, look for a .release_ver file
+extraversion := $(shell grep '^v' $(srctree)/.release_ver 2>/dev/null)
 ifeq ($(strip $(extraversion)),)
 # That didn't work either, look at name of source directory
-e1 := $(shell basename $(srctree) | grep '^busybox-w32-FRP-')
+e1 := $(shell basename $(srctree) | grep '^busybox-w32-v')
 ifneq ($(strip $(e1)),)
 extraversion := $(subst busybox-w32-,,$(e1))
 endif
@@ -394,7 +396,14 @@ endif
 endif
 
 ifneq ($(strip $(extraversion)),)
-EXTRAVERSION := .$(subst FRP,git,$(extraversion))
+# Strip the "v<version>" tag prefix.  What remains is "-N-gHASH"
+# (commits since the tag) or nothing (we are on the tag itself).
+extraversion := $(subst v$(VERSION).$(PATCHLEVEL).$(SUBLEVEL),,$(extraversion))
+ifneq ($(strip $(extraversion)),)
+EXTRAVERSION := .git$(extraversion)
+else
+EXTRAVERSION :=
+endif
 endif
 endif
 
