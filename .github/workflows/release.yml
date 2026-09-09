@@ -1,0 +1,53 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    name: Build and release
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes build-essential gcc-mingw-w64-x86-64
+
+      - name: Build Linux and Windows binaries
+        run: ./build.sh
+
+      - name: Verify binaries
+        run: |
+          test -x build-linux/busybox
+          test -x build-win64/busybox.exe
+          test -n "$(build-linux/busybox --list)"
+          x86_64-w64-mingw32-objdump -f build-win64/busybox.exe
+
+      - name: Prepare release assets
+        run: |
+          mkdir -p dist
+          install -m 0755 build-linux/busybox dist/busybox-linux-x86_64
+          install -m 0755 build-win64/busybox.exe dist/busybox-windows-x86_64.exe
+          cd dist
+          sha256sum busybox-linux-x86_64 busybox-windows-x86_64.exe > SHA256SUMS
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --verify-tag \
+            --generate-notes \
+            --title "$GITHUB_REF_NAME"
