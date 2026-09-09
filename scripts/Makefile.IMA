@@ -75,11 +75,7 @@ lib-y:=
 include networking/Kbuild
 lib-all-y += $(patsubst %,networking/%,$(sort $(lib-y)))
 lib-y:=
-include networking/udhcp/Kbuild
-lib-all-y += $(patsubst %,networking/udhcp/%,$(sort $(lib-y)))
 lib-y:=
-include networking/libiproute/Kbuild
-lib-all-y += $(patsubst %,networking/libiproute/%,$(sort $(lib-y)))
 lib-y:=
 include loginutils/Kbuild
 lib-all-y += $(patsubst %,loginutils/%,$(sort $(lib-y)))
@@ -114,20 +110,12 @@ lib-y:=
 include debianutils/Kbuild
 lib-all-y += $(patsubst %,debianutils/%,$(sort $(lib-y)))
 lib-y:=
-include klibc-utils/Kbuild
-lib-all-y += $(patsubst %,klibc-utils/%,$(sort $(lib-y)))
 lib-y:=
-include runit/Kbuild
-lib-all-y += $(patsubst %,runit/%,$(sort $(lib-y)))
 lib-y:=
-include modutils/Kbuild
-lib-all-y += $(patsubst %,modutils/%,$(sort $(lib-y)))
 lib-y:=
 include miscutils/Kbuild
 lib-all-y += $(patsubst %,miscutils/%,$(sort $(lib-y)))
 lib-y:=
-include mailutils/Kbuild
-lib-all-y += $(patsubst %,mailutils/%,$(sort $(lib-y)))
 lib-y:=
 include coreutils/libcoreutils/Kbuild
 lib-all-y += $(patsubst %,coreutils/libcoreutils/%,$(sort $(lib-y)))
@@ -135,8 +123,6 @@ lib-y:=
 include coreutils/Kbuild
 lib-all-y += $(patsubst %,coreutils/%,$(sort $(lib-y)))
 lib-y:=
-include sysklogd/Kbuild
-lib-all-y += $(patsubst %,sysklogd/%,$(sort $(lib-y)))
 lib-y:=
 include shell/Kbuild
 lib-all-y += $(patsubst %,shell/%,$(sort $(lib-y)))
@@ -150,11 +136,7 @@ lib-y:=
 include util-linux/Kbuild
 lib-all-y += $(patsubst %,util-linux/%,$(sort $(lib-y)))
 lib-y:=
-include util-linux/volume_id/Kbuild
-lib-all-y += $(patsubst %,util-linux/volume_id/%,$(sort $(lib-y)))
 lib-y:=
-include init/Kbuild
-lib-all-y += $(patsubst %,init/%,$(sort $(lib-y)))
 lib-y:=
 include libpwdgrp/Kbuild
 lib-all-y += $(patsubst %,libpwdgrp/%,$(sort $(lib-y)))
@@ -162,11 +144,7 @@ lib-y:=
 include editors/Kbuild
 lib-all-y += $(patsubst %,editors/%,$(sort $(lib-y)))
 lib-y:=
-include printutils/Kbuild
-lib-all-y += $(patsubst %,printutils/%,$(sort $(lib-y)))
 lib-y:=
-include selinux/Kbuild
-lib-all-y += $(patsubst %,selinux/%,$(sort $(lib-y)))
 lib-y:=
 include scripts/Kbuild
 lib-all-y += $(patsubst %,scripts/%,$(sort $(lib-y)))

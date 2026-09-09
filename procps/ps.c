@@ -49,6 +49,13 @@
 //config:	default y
 //config:	depends on (PS || MINIPS) && DESKTOP
 
+//config:config MINIPS
+//config:	bool "minips (11 kb)"
+//config:	default n  # for god's sake, just use "ps" name in your scripts
+//config:	help
+//config:	Alias to "ps".
+//config:#  (applet and kbuild hooks are in ps.c)
+
 //                 APPLET_NOEXEC:name    main location    suid_type     help
 //applet:IF_PS(    APPLET_NOEXEC(ps,     ps,  BB_DIR_BIN, BB_SUID_DROP, ps))
 //applet:IF_MINIPS(APPLET_NOEXEC(minips, ps,  BB_DIR_BIN, BB_SUID_DROP, ps))

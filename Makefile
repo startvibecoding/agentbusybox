@@ -545,29 +545,18 @@ libs-y		:= \
 		coreutils/ \
 		coreutils/libcoreutils/ \
 		debianutils/ \
-		klibc-utils/ \
 		e2fsprogs/ \
 		editors/ \
 		findutils/ \
-		init/ \
 		libbb/ \
 		libbb/yescrypt/ \
 		libpwdgrp/ \
 		loginutils/ \
-		mailutils/ \
 		miscutils/ \
-		modutils/ \
 		networking/ \
-		networking/libiproute/ \
-		networking/udhcp/ \
-		printutils/ \
 		procps/ \
-		runit/ \
-		selinux/ \
 		shell/ \
-		sysklogd/ \
 		util-linux/ \
-		util-linux/volume_id/ \
 		win32/ \
 
 endif # KBUILD_EXTMOD

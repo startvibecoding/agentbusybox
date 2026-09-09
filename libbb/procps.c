@@ -109,164 +109,7 @@ void FAST_FUNC free_procps_scan(procps_status_t* sp)
 	free(sp);
 }
 
-#if ENABLE_FEATURE_TOPMEM || ENABLE_PMAP
-unsigned long long FAST_FUNC fast_strtoull_16(char **endptr)
-{
-	unsigned char c;
-	char *str = *endptr;
-	unsigned long long n = 0;
 
-	/* Need to stop on both ' ' and '\n' */
-	while ((c = *str++) > ' ') {
-		c = ((c|0x20) - '0');
-		if (c > 9)
-			/* c = c + '0' - 'a' + 10: */
-			c = c - ('a' - '0' - 10);
-		n = n*16 + c;
-	}
-	*endptr = str; /* We skip trailing space! */
-	return n;
-}
-#endif
-
-#if ENABLE_FEATURE_FAST_TOP || ENABLE_FEATURE_TOPMEM || ENABLE_PMAP
-/* We cut a lot of corners here for speed */
-unsigned long FAST_FUNC fast_strtoul_10(char **endptr)
-{
-	unsigned char c;
-	char *str = *endptr;
-	unsigned long n = *str - '0';
-
-	/* Need to stop on both ' ' and '\n' */
-	while ((c = *++str) > ' ')
-		n = n*10 + (c - '0');
-
-	*endptr = str + 1; /* We skip trailing space! */
-	return n;
-}
-# if LONG_MAX < LLONG_MAX
-/* For VSZ, which can be very large */
-static unsigned long long fast_strtoull_10(char **endptr)
-{
-	unsigned char c;
-	char *str = *endptr;
-	unsigned long long n = *str - '0';
-
-	/* Need to stop on both ' ' and '\n' */
-	while ((c = *++str) > ' ')
-		n = n*10 + (c - '0');
-
-	*endptr = str + 1; /* We skip trailing space! */
-	return n;
-}
-# else
-#  define fast_strtoull_10(endptr) fast_strtoul_10(endptr)
-# endif
-
-# if ENABLE_FEATURE_FAST_TOP
-static long fast_strtol_10(char **endptr)
-{
-	if (**endptr != '-')
-		return fast_strtoul_10(endptr);
-
-	(*endptr)++;
-	return - (long)fast_strtoul_10(endptr);
-}
-# endif
-
-char* FAST_FUNC skip_fields(char *str, int count)
-{
-	do {
-		while (*str++ != ' ')
-			continue;
-		/* we found a space char, str points after it */
-	} while (--count);
-	return str;
-}
-#endif
-
-#if ENABLE_FEATURE_TOPMEM
-static NOINLINE void procps_read_smaps(pid_t pid, procps_status_t *sp)
-{
-	// There is A LOT of /proc/PID/smaps data on a big system.
-	// Optimize this for speed, makes "top -m" faster.
-//TODO large speedup:
-//read /proc/PID/smaps_rollup (cumulative stats of all mappings, much faster)
-//and  /proc/PID/maps         to get mapped_ro and mapped_rw (IOW: VSZ,VSZRW)
-
-	FILE *file;
-	char filename[sizeof("/proc/%u/smaps") + sizeof(int)*3];
-	char buf[PROCPS_BUFSIZE] ALIGN4;
-
-	sprintf(filename, "/proc/%u/smaps", (int)pid);
-
-	file = fopen_for_read(filename);
-	if (!file)
-		return;
-
-	while (fgets(buf, PROCPS_BUFSIZE, file)) {
-		// Each mapping datum has this form:
-		// f7d29000-f7d39000 rw-s FILEOFS M:m INODE FILENAME
-		// Size:                nnn kB
-		// Rss:                 nnn kB
-		// .....
-
-		char *tp;
-#define bytes4 *(uint32_t*)buf
-#define Priv   PACK32_BYTES('P','r','i','v')
-#define Shar   PACK32_BYTES('S','h','a','r')
-#define SCAN(S, X) \
-if (memcmp(buf+4, S, sizeof(S)-1) == 0) { \
-	tp = skip_whitespace(buf+4 + sizeof(S)-1); \
-	sp->X += fast_strtoul_10(&tp); \
-	continue; \
-}
-		if (bytes4 == Priv) {
-			SCAN("ate_Dirty:", private_dirty)
-			SCAN("ate_Clean:", private_clean)
-		}
-		if (bytes4 == Shar) {
-			SCAN("ed_Dirty:" , shared_dirty )
-			SCAN("ed_Clean:" , shared_clean )
-		}
-#undef bytes4
-#undef Priv
-#undef Shar
-#undef SCAN
-		tp = strchr(buf, '-');
-		if (tp) {
-			// We reached next mapping - the line of this form:
-			// f7d29000-f7d39000 rw-s FILEOFS M:m INODE FILENAME
-
-			char *rwx;
-			unsigned long long sz;
-
-			*tp = ' ';
-			tp = buf;
-			sz = fast_strtoull_16(&tp); // start
-			sz = (fast_strtoull_16(&tp) - sz) >> 10; // end - start
-			// tp -> "rw-s" string
-			rwx = tp;
-			// skipping "rw-s FILEOFS M:m INODE "
-			tp = skip_whitespace(skip_fields(tp, 4));
-			// if not a device memory mapped...
-			if (memcmp(tp, "/dev/", 5) != 0    // not "/dev/something"
-			 || strcmp(tp + 5, "zero\n") == 0  // or is "/dev/zero" (which isn't a device)
-			) {
-				if (rwx[1] == 'w')
-					sp->mapped_rw += sz;
-				else if (rwx[0] == 'r' || rwx[2] == 'x')
-					sp->mapped_ro += sz;
-				// else: seen "---p" mappings (mmap guard gaps?),
-				// do NOT account these as VSZ, they aren't really
-			}
-			if (strcmp(tp, "[stack]\n") == 0)
-				sp->stack += sz;
-		}
-	}
-	fclose(file);
-}
-#endif
 
 procps_status_t* FAST_FUNC procps_scan(procps_status_t* sp, int flags)
 {
@@ -352,16 +195,13 @@ procps_status_t* FAST_FUNC procps_scan(procps_status_t* sp, int flags)
 			| PSSCAN_COMM | PSSCAN_STATE
 			| PSSCAN_VSZ | PSSCAN_RSS
 			| PSSCAN_STIME | PSSCAN_UTIME | PSSCAN_START_TIME
-			| PSSCAN_TTY | PSSCAN_NICE
-			| PSSCAN_CPU)
+			| PSSCAN_TTY | PSSCAN_NICE)
 		) {
 			int s_idx;
 			char *cp, *comm1;
 			int tty;
-#if !ENABLE_FEATURE_FAST_TOP
 			unsigned long long vsz;
 			unsigned long rss;
-#endif
 			/* see proc(5) for some details on this */
 			strcpy(filename_tail, "stat");
 			n = read_to_buf(filename, buf);
@@ -376,7 +216,6 @@ procps_status_t* FAST_FUNC procps_scan(procps_status_t* sp, int flags)
 			/*if (comm1)*/
 				safe_strncpy(sp->comm, comm1 + 1, sizeof(sp->comm));
 
-#if !ENABLE_FEATURE_FAST_TOP
 			n = sscanf(cp+2,
 				"%c %u "               /* state, ppid */
 				"%u %u %d %*s "        /* pgid, sid, tty, tpgid */
@@ -388,12 +227,6 @@ procps_status_t* FAST_FUNC procps_scan(procps_status_t* sp, int flags)
 				"%lu "                 /* start_time */
 				"%llu "                /* vsize - can be very large */
 				"%lu "                 /* rss */
-# if ENABLE_FEATURE_TOP_SMP_PROCESS
-				"%*s %*s %*s %*s %*s %*s " /*rss_rlim, start_code, end_code, start_stack, kstk_esp, kstk_eip */
-				"%*s %*s %*s %*s "         /*signal, blocked, sigignore, sigcatch */
-				"%*s %*s %*s %*s "         /*wchan, nswap, cnswap, exit_signal */
-				"%d"                       /*cpu last seen on*/
-# endif
 				,
 				sp->state, &sp->ppid,
 				&sp->pgid, &sp->sid, &tty,
@@ -402,17 +235,10 @@ procps_status_t* FAST_FUNC procps_scan(procps_status_t* sp, int flags)
 				&sp->start_time,
 				&vsz,
 				&rss
-# if ENABLE_FEATURE_TOP_SMP_PROCESS
-				, &sp->last_seen_on_cpu
-# endif
 				);
 
 			if (n < 11)
 				continue; /* bogus data, get next /proc/XXX */
-# if ENABLE_FEATURE_TOP_SMP_PROCESS
-			if (n == 11)
-				sp->last_seen_on_cpu = 0;
-# endif
 
 			/* vsz is in bytes and we want kb */
 			sp->vsz = vsz >> 10;
@@ -420,37 +246,7 @@ procps_status_t* FAST_FUNC procps_scan(procps_status_t* sp, int flags)
 			sp->rss = rss << sp->shift_pages_to_kb;
 			sp->tty_major = (tty >> 8) & 0xfff;
 			sp->tty_minor = (tty & 0xff) | ((tty >> 12) & 0xfff00);
-#else
-/* This costs ~100 bytes more but makes top faster by 20%
- * If you run 10000 processes, this may be important for you */
-			sp->state[0] = cp[2];
-			cp += 4;
-			sp->ppid = fast_strtoul_10(&cp);
-			sp->pgid = fast_strtoul_10(&cp);
-			sp->sid = fast_strtoul_10(&cp);
-			tty = fast_strtoul_10(&cp);
-			sp->tty_major = (tty >> 8) & 0xfff;
-			sp->tty_minor = (tty & 0xff) | ((tty >> 12) & 0xfff00);
-			cp = skip_fields(cp, 6); /* tpgid, flags, min_flt, cmin_flt, maj_flt, cmaj_flt */
-			sp->utime = fast_strtoul_10(&cp);
-			sp->stime = fast_strtoul_10(&cp);
-			cp = skip_fields(cp, 3); /* cutime, cstime, priority */
-			tasknice = fast_strtol_10(&cp);
-			cp = skip_fields(cp, 2); /* timeout, it_real_value */
-			sp->start_time = fast_strtoul_10(&cp);
-			/* vsz is in bytes and we want kb */
-			sp->vsz = fast_strtoull_10(&cp) >> 10;
-			/* vsz is in bytes but rss is in *PAGES*! Can you believe that? */
-			sp->rss = fast_strtoul_10(&cp) << sp->shift_pages_to_kb;
-# if ENABLE_FEATURE_TOP_SMP_PROCESS
-			/* (6): rss_rlim, start_code, end_code, start_stack, kstk_esp, kstk_eip */
-			/* (4): signal, blocked, sigignore, sigcatch */
-			/* (4): wchan, nswap, cnswap, exit_signal */
-			cp = skip_fields(cp, 14);
-//FIXME: is it safe to assume this field exists?
-			sp->last_seen_on_cpu = fast_strtoul_10(&cp);
-# endif
-#endif /* FEATURE_FAST_TOP */
+
 
 #if ENABLE_FEATURE_PS_ADDITIONAL_COLUMNS
 			sp->niceness = tasknice;
@@ -471,10 +267,6 @@ procps_status_t* FAST_FUNC procps_scan(procps_status_t* sp, int flags)
 			}
 		}
 
-#if ENABLE_FEATURE_TOPMEM
-		if (flags & PSSCAN_SMAPS)
-			procps_read_smaps(pid, sp);
-#endif /* TOPMEM */
 #if ENABLE_FEATURE_PS_ADDITIONAL_COLUMNS
 		if (flags & PSSCAN_RUIDGID) {
 			FILE *file;

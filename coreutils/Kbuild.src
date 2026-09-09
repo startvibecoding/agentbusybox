@@ -13,6 +13,3 @@ INSERT
 lib-$(CONFIG_MORE)          += cat.o   # more uses it if stdout isn't a tty
 lib-$(CONFIG_LESS)          += cat.o   # less too
 lib-$(CONFIG_CRONTAB)       += cat.o   # crontab -l
-lib-$(CONFIG_ADDUSER)       += chown.o # used by adduser
-lib-$(CONFIG_ADDGROUP)      += chown.o # used by addgroup
-lib-$(CONFIG_FTPD)          += ls.o    # used by ftpd

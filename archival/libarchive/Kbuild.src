@@ -76,16 +76,6 @@ lib-$(CONFIG_GZIP)                      += open_transformer.o
 lib-$(CONFIG_BZIP2)                     += open_transformer.o
 lib-$(CONFIG_LZOP)                      += open_transformer.o
 lib-$(CONFIG_MAN)                       += open_transformer.o
-lib-$(CONFIG_SETFONT)                   += open_transformer.o
-lib-$(CONFIG_FEATURE_2_4_MODULES)       += open_transformer.o
-lib-$(CONFIG_MODINFO)                   += open_transformer.o
-lib-$(CONFIG_INSMOD)                    += open_transformer.o
-lib-$(CONFIG_DEPMOD)                    += open_transformer.o
-lib-$(CONFIG_RMMOD)                     += open_transformer.o
-lib-$(CONFIG_LSMOD)                     += open_transformer.o
-lib-$(CONFIG_MODPROBE)                  += open_transformer.o
-lib-$(CONFIG_MODPROBE_SMALL)            += open_transformer.o
-
 lib-$(CONFIG_FEATURE_SEAMLESS_Z)        += open_transformer.o decompress_uncompress.o
 lib-$(CONFIG_FEATURE_SEAMLESS_GZ)       += open_transformer.o decompress_gunzip.o
 lib-$(CONFIG_FEATURE_SEAMLESS_BZ2)      += open_transformer.o decompress_bunzip2.o

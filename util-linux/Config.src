@@ -63,6 +63,4 @@ config FEATURE_MTAB_SUPPORT
 	About the only reason to use this is if you've removed /proc from
 	your kernel.
 
-source util-linux/volume_id/Config.in
-
 endmenu

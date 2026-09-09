@@ -113,15 +113,4 @@ config FEATURE_TLS_SCHANNEL_1_3
 
 INSERT
 
-source networking/udhcp/Config.in
-
-config IFUPDOWN_UDHCPC_CMD_OPTIONS
-	string "ifup udhcpc command line options"
-	default "-R -n"
-	depends on IFUP || IFDOWN
-	help
-	Command line options to pass to udhcpc from ifup.
-	Intended to alter options not available in /etc/network/interfaces.
-	(IE: --syslog --background etc...)
-
 endmenu

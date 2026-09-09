@@ -1044,9 +1044,6 @@ typedef struct tls_state {
 	int ofd;
 	int ifd;
 
-#if ENABLE_SSL_SERVER // || ENABLE_FEATURE_HTTPD_SSL
-	smallint expecting_first_packet;
-#endif
 	uint16_t cipher_id;
 	unsigned min_encrypted_len_on_read;
 	unsigned MAC_size;
@@ -1089,11 +1086,6 @@ typedef struct tls_state {
 	struct tls_aes aes_encrypt;
 	struct tls_aes aes_decrypt;
 	uint8_t H[16]; //used by AES_GCM
-
-#if ENABLE_SSL_SERVER // || ENABLE_FEATURE_HTTPD_SSL
-	/* For ECDHE: server's ephemeral EC private key */
-	//uint8_t ecc_priv_key32[32];
-#endif
 } tls_state_t;
 #endif
 
@@ -1421,11 +1413,7 @@ const char* get_cached_groupname(gid_t gid) FAST_FUNC;
 void clear_username_cache(void) FAST_FUNC;
 /* internally usernames are saved in fixed-sized char[] buffers */
 enum { USERNAME_MAX_SIZE = 32 - sizeof(uid_t) };
-#if ENABLE_FEATURE_CHECK_NAMES
-void die_if_bad_username(const char* name) FAST_FUNC;
-#else
 #define die_if_bad_username(name) ((void)(name))
-#endif
 /*
  * Returns (-1) terminated malloced result of getgroups().
  * Reallocs group_array (useful for repeated calls).
@@ -1821,10 +1809,6 @@ int ls_main(int argc, char **argv) IF_LS(MAIN_EXTERNALLY_VISIBLE);
 int gunzip_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
 int bunzip2_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
 
-#if ENABLE_ROUTE
-void bb_displayroutes(int noresolve, int netstatfmt) FAST_FUNC;
-#endif
-
 struct number_state {
 	unsigned width;
 	unsigned start;
@@ -1991,19 +1975,6 @@ void exec_prog_or_SHELL(char **argv) NORETURN FAST_FUNC;
  */
 const char *get_shell_name(void) FAST_FUNC;
 
-#if ENABLE_FEATURE_SETPRIV_CAPABILITIES || ENABLE_RUN_INIT
-unsigned cap_name_to_number(const char *cap) FAST_FUNC;
-void printf_cap(const char *pfx, unsigned cap_no) FAST_FUNC;
-void drop_capability(int cap_ordinal) FAST_FUNC;
-/* Structures inside "struct caps" are Linux-specific and libcap-specific: */
-#define DEFINE_STRUCT_CAPS \
-struct caps { \
-	struct __user_cap_header_struct header; \
-	unsigned u32s; \
-	struct __user_cap_data_struct data[2]; \
-}
-void getcaps(void *caps) FAST_FUNC;
-#endif
 
 #if ENABLE_SELINUX
 extern void renew_current_security_context(void) FAST_FUNC;
@@ -2044,15 +2015,8 @@ extern void selinux_or_die(void) FAST_FUNC;
 #define SETUP_ENV_CHDIR             (1 << 4)
 void setup_environment(const char *shell, int flags, const struct passwd *pw) FAST_FUNC;
 void nuke_str(char *str) FAST_FUNC;
-#if ENABLE_FEATURE_SECURETTY && !ENABLE_PAM
-int is_tty_secure(const char *short_tty) FAST_FUNC;
-#else
 static ALWAYS_INLINE int is_tty_secure(const char *short_tty UNUSED_PARAM) { return 1; }
-#endif
 #define CHECKPASS_PW_HAS_EMPTY_PASSWORD 2
-int check_password(const struct passwd *pw, const char *plaintext) FAST_FUNC;
-int ask_and_check_password_extended(const struct passwd *pw, int timeout, const char *prompt) FAST_FUNC;
-int ask_and_check_password(const struct passwd *pw) FAST_FUNC;
 /* Returns a malloced string */
 #if !ENABLE_USE_BB_CRYPT
 #define pw_encrypt(clear, salt, cleanup) pw_encrypt(clear, salt)
@@ -2081,10 +2045,8 @@ extern int crypt_make_rand64encoded(char *p, int cnt /*, int rnd*/) FAST_FUNC;
 extern char* crypt_make_pw_salt(char p[MAX_PW_SALT_LEN], const char *algo) FAST_FUNC;
 
 /* Returns number of lines changed, or -1 on error */
-#if !(ENABLE_FEATURE_ADDUSER_TO_GROUP || ENABLE_FEATURE_DEL_USER_FROM_GROUP)
 #define update_passwd(filename, username, data, member) \
 	update_passwd(filename, username, data)
-#endif
 extern int update_passwd(const char *filename,
 		const char *username,
 		const char *data,
@@ -2372,24 +2334,12 @@ typedef struct procps_status_t {
 	int niceness;
 #endif
 	unsigned tty_major,tty_minor;
-#if ENABLE_FEATURE_TOPMEM
-	unsigned long mapped_rw;
-	unsigned long mapped_ro;
-	unsigned long shared_clean;
-	unsigned long shared_dirty;
-	unsigned long private_clean;
-	unsigned long private_dirty;
-	unsigned long stack;
-#endif
 	char state[4];
 	/* basename of executable in exec(2), read from /proc/N/stat
 	 * (if executable is symlink or script, it is NOT replaced
 	 * by link target or interpreter name) */
 	char comm[COMM_LEN];
 	/* user/group? - use passwd/group parsing functions */
-#if ENABLE_FEATURE_TOP_SMP_PROCESS
-	int last_seen_on_cpu;
-#endif
 } procps_status_t;
 /* flag bits for procps_scan(xx, flags) calls */
 enum {
@@ -2408,20 +2358,17 @@ enum {
 	PSSCAN_STIME    = 1 << 12,
 	PSSCAN_UTIME    = 1 << 13,
 	PSSCAN_TTY      = 1 << 14,
-	PSSCAN_SMAPS	= (1 << 15) * ENABLE_FEATURE_TOPMEM,
 	/* NB: used by find_pid_by_name(). Any applet using it
 	 * needs to be mentioned here. */
-	PSSCAN_ARGVN    = (1 << 16) * (ENABLE_KILLALL
+	PSSCAN_ARGVN    = (1 << 15) * (ENABLE_KILLALL
 				|| ENABLE_PGREP || ENABLE_PKILL
 				|| ENABLE_PIDOF
-				|| ENABLE_SESTATUS
 				),
-	PSSCAN_CONTEXT  = (1 << 17) * ENABLE_SELINUX,
-	PSSCAN_START_TIME = 1 << 18,
-	PSSCAN_CPU      = (1 << 19) * ENABLE_FEATURE_TOP_SMP_PROCESS,
-	PSSCAN_NICE     = (1 << 20) * ENABLE_FEATURE_PS_ADDITIONAL_COLUMNS,
-	PSSCAN_RUIDGID  = (1 << 21) * ENABLE_FEATURE_PS_ADDITIONAL_COLUMNS,
-	PSSCAN_TASKS	= (1 << 22) * ENABLE_FEATURE_SHOW_THREADS,
+	PSSCAN_CONTEXT  = (1 << 16) * ENABLE_SELINUX,
+	PSSCAN_START_TIME = 1 << 17,
+	PSSCAN_NICE     = (1 << 18) * ENABLE_FEATURE_PS_ADDITIONAL_COLUMNS,
+	PSSCAN_RUIDGID  = (1 << 19) * ENABLE_FEATURE_PS_ADDITIONAL_COLUMNS,
+	PSSCAN_TASKS	= (1 << 20) * ENABLE_FEATURE_SHOW_THREADS,
 };
 //procps_status_t* alloc_procps_scan(void) FAST_FUNC;
 void free_procps_scan(procps_status_t* sp) FAST_FUNC;
@@ -2819,19 +2766,6 @@ extern const char bb_default_login_shell[] ALIGN1;
 # define VC_4 "/dev/tty4"
 # define VC_5 "/dev/tty5"
 # define VC_FORMAT "/dev/tty%d"
-#elif ENABLE_FEATURE_DEVFS
-/*Linux, obsolete devfs names */
-# define CURRENT_VC "/dev/vc/0"
-# define VC_1 "/dev/vc/1"
-# define VC_2 "/dev/vc/2"
-# define VC_3 "/dev/vc/3"
-# define VC_4 "/dev/vc/4"
-# define VC_5 "/dev/vc/5"
-# define VC_FORMAT "/dev/vc/%d"
-# define LOOP_FORMAT "/dev/loop/%u"
-# define LOOP_NAMESIZE (sizeof("/dev/loop/") + sizeof(int)*3 + 1)
-# define LOOP_NAME "/dev/loop/"
-# define FB_0 "/dev/fb/0"
 #else
 /*Linux, normal names */
 # define CURRENT_VC "/dev/tty0"

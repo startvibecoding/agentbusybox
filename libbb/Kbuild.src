@@ -124,9 +124,6 @@ lib-$(CONFIG_PLATFORM_POSIX) += udp_io.o
 lib-$(CONFIG_PLATFORM_POSIX) += write.o
 lib-$(CONFIG_PLATFORM_POSIX) += xgethostbyname.o
 
-lib-$(CONFIG_MOUNT) += match_fstype.o
-lib-$(CONFIG_UMOUNT) += match_fstype.o
-
 lib-$(CONFIG_FEATURE_UTMP) += utmp.o
 
 # A mix of optimizations (why build stuff we know won't be used)
@@ -134,64 +131,21 @@ lib-$(CONFIG_FEATURE_UTMP) += utmp.o
 lib-$(CONFIG_SELINUX) += selinux_common.o
 lib-$(CONFIG_FEATURE_MTAB_SUPPORT) += mtab.o
 lib-$(CONFIG_UNICODE_SUPPORT) += unicode.o
-lib-$(CONFIG_FEATURE_CHECK_NAMES) += die_if_bad_username.o
 
 lib-$(CONFIG_NC_110_COMPAT) += udp_io.o
 lib-$(CONFIG_NETCAT) += udp_io.o
-lib-$(CONFIG_DNSD) += udp_io.o
-lib-$(CONFIG_NTPD) += udp_io.o
 lib-$(CONFIG_TFTP) += udp_io.o
 lib-$(CONFIG_TFTPD) += udp_io.o
-lib-$(CONFIG_TCPSVD) += udp_io.o
-lib-$(CONFIG_UDPSVD) += udp_io.o
-lib-$(CONFIG_TRACEROUTE) += udp_io.o
-lib-$(CONFIG_TRACEROUTE6) += udp_io.o
 
-lib-$(CONFIG_LOSETUP) += loop.o
 lib-$(CONFIG_FEATURE_MOUNT_LOOP) += loop.o
 
-lib-$(CONFIG_ADDGROUP) += update_passwd.o
-lib-$(CONFIG_ADDUSER) += update_passwd.o
-lib-$(CONFIG_DELGROUP) += update_passwd.o
-lib-$(CONFIG_DELUSER) += update_passwd.o
-
-lib-$(CONFIG_FTPD) += pw_encrypt.o correct_password.o
-lib-$(CONFIG_PASSWD) += pw_encrypt.o update_passwd.o
-lib-$(CONFIG_FEATURE_PASSWD_WEAK_CHECK) += obscure.o
-lib-$(CONFIG_CHPASSWD) += pw_encrypt.o update_passwd.o
-lib-$(CONFIG_CRYPTPW) += pw_encrypt.o
-lib-$(CONFIG_MKPASSWD) += pw_encrypt.o
-lib-$(CONFIG_SULOGIN) += pw_encrypt.o correct_password.o
-lib-$(CONFIG_VLOCK) += pw_encrypt.o correct_password.o
-lib-$(CONFIG_SU) += pw_encrypt.o correct_password.o
-lib-$(CONFIG_LOGIN) += pw_encrypt.o correct_password.o
 lib-$(CONFIG_FEATURE_HTTPD_AUTH_MD5) += pw_encrypt.o
-lib-$(CONFIG_FEATURE_FTP_AUTHENTICATION) += pw_encrypt.o
 
 lib-$(CONFIG_DF) += find_mount_point.o
-lib-$(CONFIG_MKFS_MINIX) += find_mount_point.o
-lib-$(CONFIG_MKFS_EXT2) += find_mount_point.o
-lib-$(CONFIG_MKE2FS) += find_mount_point.o
-lib-$(CONFIG_MKFS_REISER) += find_mount_point.o
-lib-$(CONFIG_FSCK_MINIX) += find_mount_point.o
-lib-$(CONFIG_MOUNT) += find_mount_point.o
 lib-$(CONFIG_STAT) += find_mount_point.o
 
-lib-$(CONFIG_HWCLOCK) += rtc.o
-lib-$(CONFIG_RTCWAKE) += rtc.o
-
-lib-$(CONFIG_IOSTAT) += get_cpu_count.o
-lib-$(CONFIG_MPSTAT) += get_cpu_count.o
-lib-$(CONFIG_POWERTOP) += get_cpu_count.o
-
-lib-$(CONFIG_PING) += inet_cksum.o
-lib-$(CONFIG_PING6) += inet_cksum.o
 lib-$(CONFIG_TRACEROUTE) += inet_cksum.o
 lib-$(CONFIG_TRACEROUTE6) += inet_cksum.o
-lib-$(CONFIG_UDHCPC) += inet_cksum.o
-lib-$(CONFIG_UDHCPC6) += inet_cksum.o
-lib-$(CONFIG_UDHCPD) += inet_cksum.o
-lib-$(CONFIG_DHCPRELAY) += inet_cksum.o
 
 # We shouldn't build xregcomp.c if we don't need it - this ensures we don't
 # require regex.h to be in the include dir even if we don't need it thereby
@@ -203,13 +157,10 @@ lib-$(CONFIG_GREP) += xregcomp.o
 lib-$(CONFIG_EGREP) += xregcomp.o
 lib-$(CONFIG_FGREP) += xregcomp.o
 lib-$(CONFIG_EXPR) += xregcomp.o
-lib-$(CONFIG_MDEV) += xregcomp.o
 lib-$(CONFIG_LESS) += xregcomp.o
 lib-$(CONFIG_PGREP) += xregcomp.o
 lib-$(CONFIG_PKILL) += xregcomp.o
-lib-$(CONFIG_DEVFSD) += xregcomp.o
 lib-$(CONFIG_FEATURE_FIND_REGEX) += xregcomp.o
 lib-$(CONFIG_FEATURE_CUT_REGEX) += xregcomp.o
 
 # Add the experimental logging functionality, only used by zcip
-lib-$(CONFIG_ZCIP) += logenv.o
