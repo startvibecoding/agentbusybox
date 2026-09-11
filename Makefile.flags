@@ -11,7 +11,7 @@ CPPFLAGS += $(call cc-option,-std=gnu99,)
 
 CPPFLAGS += \
 	-Iinclude -Ilibbb \
-	$(if $(KBUILD_SRC),-Iinclude2 -I$(srctree)/include -I$(srctree)/libbb) \
+	$(if $(KBUILD_SRC),-I$(srctree)/include -I$(srctree)/libbb) \
 	-include include/autoconf.h \
 	-D_GNU_SOURCE -DNDEBUG \
 	$(if $(CONFIG_LFS),-D_LARGEFILE_SOURCE -D_LARGEFILE64_SOURCE -D_FILE_OFFSET_BITS=64) \
@@ -242,9 +242,3 @@ ifneq ($(CONFIG_EXTRA_LDFLAGS),)
 LDFLAGS += $(strip $(subst ",,$(CONFIG_EXTRA_LDFLAGS)))
 #"))
 endif
-
-# Busybox is a stack-fatty so make sure we increase default size
-# TODO: use "make stksizes" to find & fix big stack users
-# (we stole scripts/checkstack.pl from the kernel... thanks guys!)
-# Reduced from 20k to 16k in 1.9.0.
-FLTFLAGS += -s 16000

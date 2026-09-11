@@ -151,4 +151,15 @@ int mu_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
 登录/用户管理(passwd/login/adduser 等)、Linux 杂项(devmem/hdparm/i2c/MTD/UBI 等)。
 移除后公共头文件(libbb.h)、共享库 kbuild 挂载、Makefile 目录表均已同步清理。
 
+构建系统也已精简(顶层 `Makefile` 1417→897 行):删掉从未可用的 Linux 内核构建遗留——
+kallsyms/System.map 三段链接、可加载模块与外部模块(`make modules`、`M=`、MODVERDIR、
+depmod/modpost)、sparse 静态检查(`make C=1`)、`%pkg`/rpm 打包、DocBook `%docs`、
+includecheck/versioncheck/namespacecheck(对应 perl 脚本已不存在)、include2 asm 符号链接、
+`INSTALL_PATH=/boot`、KBUILD_IMAGE、UTS_MACHINE、version.h filechk、FLTFLAGS(bFLT)、
+`.lst` 目标(scripts/makelst 已不存在);`scripts/Makefile.build` 同步清理(checksrc、
+MODVERSIONS、single/multi-used-m 规则)。保留全部真实功能:`O=` 外置构建、arch/*/Makefile
+的 CFLAGS 调整、config/构建混合目标、tags/cscope/checkstack、install、clean/mrproper。
+HOSTCXX 因 scripts/kconfig 的 xconfig 引用而保留。验证:Linux 产物与精简前逐字节一致
+(仅时间戳不同),Windows mingw 交叉构建产物 179 applet 不变。
+
 如需恢复某个 applet,`git log` 或上游 busybox 可找回对应 .c 文件,补上即可。
