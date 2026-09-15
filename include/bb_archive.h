@@ -105,9 +105,6 @@ typedef struct archive_handle_t {
 	char* tar__to_command;
 	const char* tar__to_command_shell;
 # endif
-# if ENABLE_FEATURE_TAR_SELINUX
-	char* tar__sctx[2];
-# endif
 #endif
 #if ENABLE_CPIO || ENABLE_RPM2CPIO || ENABLE_RPM
 	uoff_t cpio__blocks;

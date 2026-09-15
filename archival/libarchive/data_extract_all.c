@@ -17,16 +17,6 @@ void FAST_FUNC data_extract_all(archive_handle_t *archive_handle)
 # define dst_name (file_header->name)
 #endif
 
-#if ENABLE_FEATURE_TAR_SELINUX
-	char *sctx = archive_handle->tar__sctx[PAX_NEXT_FILE];
-	if (!sctx)
-		sctx = archive_handle->tar__sctx[PAX_GLOBAL];
-	if (sctx) { /* setfscreatecon is 4 syscalls, avoid if possible */
-		setfscreatecon(sctx);
-		free(archive_handle->tar__sctx[PAX_NEXT_FILE]);
-		archive_handle->tar__sctx[PAX_NEXT_FILE] = NULL;
-	}
-#endif
 
 	/* Hard links are encoded as regular files of size 0
 	 * with a nonempty link field */
@@ -257,10 +247,4 @@ void FAST_FUNC data_extract_all(archive_handle_t *archive_handle)
 	}
 
  ret: ;
-#if ENABLE_FEATURE_TAR_SELINUX
-	if (sctx) {
-		/* reset the context after creating an entry */
-		setfscreatecon(NULL);
-	}
-#endif
 }

@@ -89,9 +89,7 @@
 //usage:#define cp_full_usage "\n\n"
 //usage:       "Copy SOURCEs to DEST\n"
 //usage:     "\n	-a	Same as -dpR"
-//usage:	IF_SELINUX(
-//usage:     "\n	-c	Preserve security context"
-//usage:	)
+//usage:	
 //usage:     "\n	-R,-r	Recurse"
 //usage:     "\n	-d,-P	Preserve symlinks (default if -R)"
 //usage:     "\n	-L	Follow all symlinks"
@@ -194,11 +192,6 @@ int cp_main(int argc, char **argv)
 	if (flags & FILEUTILS_DEREF_SOFTLINK) /* -L */
 		flags |= FILEUTILS_DEREFERENCE;
 
-#if ENABLE_SELINUX
-	if (flags & FILEUTILS_PRESERVE_SECURITY_CONTEXT) {
-		selinux_or_die();
-	}
-#endif
 
 	status = EXIT_SUCCESS;
 	if (!(flags & FILEUTILS_TARGET_DIR)) {

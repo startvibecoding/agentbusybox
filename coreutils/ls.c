@@ -105,7 +105,7 @@
 //usage:	IF_FEATURE_HUMAN_READABLE("h")
 //usage:	IF_FEATURE_LS_SORTFILES("rSXv")
 //usage:	IF_FEATURE_LS_TIMESTAMPS("ctu")
-//usage:	IF_SELINUX("kZ") "]"
+//usage:	 "]"
 //usage:	IF_FEATURE_LS_WIDTH(" [-w WIDTH]") " [FILE]..."
 //usage:#define ls_full_usage "\n\n"
 //usage:       "List directory contents\n"
@@ -163,9 +163,7 @@
 //usage:     "\n	-tu	Sort by atime"
 //usage:	)
 //usage:     "\n	-r	Reverse sort order"
-//usage:	IF_SELINUX(
-//usage:     "\n	-Z	List security context and permission"
-//usage:	)
+//usage:	
 //usage:	IF_FEATURE_LS_WIDTH(
 //usage:     "\n	-w N	Format N columns wide"
 //usage:	)
@@ -181,21 +179,6 @@
 
 
 /* This is a NOEXEC applet. Be very careful! */
-
-
-#if ENABLE_FTPD
-/* ftpd uses ls, and without timestamps Mozilla won't understand
- * ftpd's LIST output.
- */
-# undef CONFIG_FEATURE_LS_TIMESTAMPS
-# undef ENABLE_FEATURE_LS_TIMESTAMPS
-# undef IF_FEATURE_LS_TIMESTAMPS
-# undef IF_NOT_FEATURE_LS_TIMESTAMPS
-# define CONFIG_FEATURE_LS_TIMESTAMPS 1
-# define ENABLE_FEATURE_LS_TIMESTAMPS 1
-# define IF_FEATURE_LS_TIMESTAMPS(...) __VA_ARGS__
-# define IF_NOT_FEATURE_LS_TIMESTAMPS(...)
-#endif
 
 
 enum {
@@ -230,7 +213,7 @@ SPLIT_SUBDIR    = 2,
 	"Cadi1lgnsxA"        /* 11 opts, total 11 */ \
 	IF_FEATURE_LS_FILETYPES("Fp")    /* 2, 13 */ \
 	IF_FEATURE_LS_RECURSIVE("R")     /* 1, 14 */ \
-	IF_SELINUX("Z")                  /* 1, 15 */ \
+	                  /* 1, 15 */ \
 	"Q"                              /* 1, 16 */ \
 	IF_FEATURE_LS_TIMESTAMPS("ctu")  /* 3, 19 */ \
 	IF_FEATURE_LS_SORTFILES("SXrv")  /* 4, 23 */ \
@@ -267,7 +250,7 @@ enum {
 	OPTBIT_p, /* 12 */
 	OPTBIT_R = OPTBIT_F + 2 * ENABLE_FEATURE_LS_FILETYPES,
 	OPTBIT_Z = OPTBIT_R + 1 * ENABLE_FEATURE_LS_RECURSIVE,
-	OPTBIT_Q = OPTBIT_Z + 1 * ENABLE_SELINUX,
+	OPTBIT_Q = OPTBIT_Z,
 	OPTBIT_c, /* 16 */
 	OPTBIT_t, /* 17 */
 	OPTBIT_u, /* 18 */
@@ -291,7 +274,6 @@ enum {
 	OPT_F = (1 << OPTBIT_F) * ENABLE_FEATURE_LS_FILETYPES,
 	OPT_p = (1 << OPTBIT_p) * ENABLE_FEATURE_LS_FILETYPES,
 	OPT_R = (1 << OPTBIT_R) * ENABLE_FEATURE_LS_RECURSIVE,
-	OPT_Z = (1 << OPTBIT_Z) * ENABLE_SELINUX,
 	OPT_Q = (1 << OPTBIT_Q),
 	OPT_c = (1 << OPTBIT_c) * ENABLE_FEATURE_LS_TIMESTAMPS,
 	OPT_t = (1 << OPTBIT_t) * ENABLE_FEATURE_LS_TIMESTAMPS,
@@ -319,7 +301,7 @@ struct dnode {
 	const char *name;       /* usually basename, but think "ls -l dir/file" */
 	const char *fullname;   /* full name (usable for stat etc) */
 	struct dnode *dn_next;  /* for linked list */
-	IF_SELINUX(security_context_t sid;)
+	
 	smallint fname_allocated;
 
 	/* Used to avoid re-doing [l]stat at printout stage
@@ -625,14 +607,6 @@ static NOINLINE unsigned display_single(const struct dnode *dn)
 			}
 		}
 #endif
-#if ENABLE_SELINUX
-	}
-	if (opt & OPT_Z) {
-		column += printf("%-32s ", dn->sid ? dn->sid : "?");
-		freecon(dn->sid);
-	}
-	if (opt & OPT_l) {
-#endif
 		/* long listing: show size */
 		if (S_ISBLK(dn->dn_mode) || S_ISCHR(dn->dn_mode)) {
 			column += printf("%4u, %3u ",
@@ -748,7 +722,6 @@ static void display_files(struct dnode **dn, unsigned nfiles)
 				column_width = len;
 		}
 		column_width += 2
-			+ ((option_mask32 & OPT_Z) ? 33 : 0) /* context width */
 #if !ENABLE_FEATURE_EXTRA_FILE_DATA
 			+ ((option_mask32 & OPT_i) ? 8 : 0) /* inode# width */
 #else
@@ -810,11 +783,6 @@ static struct dnode *my_stat(const char *fullname, const char *name, int force_f
 	cur->name = name;
 
 	if ((option_mask32 & OPT_L) || force_follow) {
-#if ENABLE_SELINUX
-		if (option_mask32 & OPT_Z) {
-			getfilecon(fullname, &cur->sid);
-		}
-#endif
 		if (stat(fullname, &statbuf)) {
 			bb_simple_perror_msg(fullname);
 			G.exit_code = EXIT_FAILURE;
@@ -823,11 +791,6 @@ static struct dnode *my_stat(const char *fullname, const char *name, int force_f
 		}
 		cur->dn_mode_stat = statbuf.st_mode;
 	} else {
-#if ENABLE_SELINUX
-		if (option_mask32 & OPT_Z) {
-			lgetfilecon(fullname, &cur->sid);
-		}
-#endif
 		if (lstat(fullname, &statbuf)) {
 			bb_simple_perror_msg(fullname);
 			G.exit_code = EXIT_FAILURE;
@@ -1292,12 +1255,6 @@ int ls_main(int argc UNUSED_PARAM, char **argv)
 		G_terminal_width = INT_MAX; /* "infinite" */
 #endif
 
-#if ENABLE_SELINUX
-	if (opt & OPT_Z) {
-		if (!is_selinux_enabled())
-			option_mask32 &= ~OPT_Z;
-	}
-#endif
 
 #if ENABLE_FEATURE_LS_COLOR
 	/* set G_show_color = 1/0 */

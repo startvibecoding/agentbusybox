@@ -105,7 +105,7 @@ void FAST_FUNC free_procps_scan(procps_status_t* sp)
 #endif
 	free(sp->argv0);
 	free(sp->exe);
-	IF_SELINUX(free(sp->context);)
+	
 	free(sp);
 }
 
@@ -167,12 +167,6 @@ procps_status_t* FAST_FUNC procps_scan(procps_status_t* sp, int flags)
 		if (!(flags & ~PSSCAN_PID))
 			break; /* we needed only pid, we got it */
 
-#if ENABLE_SELINUX
-		if (flags & PSSCAN_CONTEXT) {
-			if (getpidcon(sp->pid, &sp->context) < 0)
-				sp->context = NULL;
-		}
-#endif
 
 #if ENABLE_FEATURE_SHOW_THREADS
 		if (sp->task_dir)

@@ -166,9 +166,6 @@ int mv_main(int argc, char **argv)
 				 * "read from device and write contents to dst"
 				 * instead of "create same device node" */
 				copy_flag = FILEUTILS_RECUR | FILEUTILS_PRESERVE_STATUS;
-#if ENABLE_SELINUX
-				copy_flag |= FILEUTILS_PRESERVE_SECURITY_CONTEXT;
-#endif
 				if ((copy_file(*argv, dest, copy_flag) >= 0)
 				 && (remove_file(*argv, FILEUTILS_RECUR | FILEUTILS_FORCE) >= 0)
 				) {

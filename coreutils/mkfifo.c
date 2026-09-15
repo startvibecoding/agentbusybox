@@ -21,13 +21,11 @@
 /* http://www.opengroup.org/onlinepubs/007904975/utilities/mkfifo.html */
 
 //usage:#define mkfifo_trivial_usage
-//usage:       "[-m MODE] " IF_SELINUX("[-Z] ") "NAME"
+//usage:       "[-m MODE] "  "NAME"
 //usage:#define mkfifo_full_usage "\n\n"
 //usage:       "Create named pipe\n"
 //usage:     "\n	-m MODE	Mode (default a=rw)"
-//usage:	IF_SELINUX(
-//usage:     "\n	-Z	Set security context"
-//usage:	)
+//usage:	
 
 #include "libbb.h"
 #include "libcoreutils/coreutils.h"

@@ -122,23 +122,6 @@ int FAST_FUNC copy_file(const char *source, const char *dest, int flags)
 		dest_exists = 1;
 	}
 
-#if ENABLE_SELINUX
-	if ((flags & FILEUTILS_PRESERVE_SECURITY_CONTEXT) && is_selinux_enabled() > 0) {
-		security_context_t con;
-		if (lgetfilecon(source, &con) >= 0) {
-			if (setfscreatecon(con) < 0) {
-				bb_perror_msg("can't set setfscreatecon %s", con);
-				freecon(con);
-				return -1;
-			}
-		} else if (errno == ENOTSUP || errno == ENODATA) {
-			setfscreatecon_or_die(NULL);
-		} else {
-			bb_perror_msg("can't lgetfilecon %s", source);
-			return -1;
-		}
-	}
-#endif
 
 	if (S_ISDIR(source_stat.st_mode)) {
 		DIR *dp;
@@ -329,25 +312,6 @@ int FAST_FUNC copy_file(const char *source, const char *dest, int flags)
 			}
 		}
 
-#if ENABLE_SELINUX
-		if ((flags & (FILEUTILS_PRESERVE_SECURITY_CONTEXT|FILEUTILS_SET_SECURITY_CONTEXT))
-		 && is_selinux_enabled() > 0
-		) {
-			security_context_t con;
-			if (getfscreatecon(&con) == -1) {
-				bb_simple_perror_msg("getfscreatecon");
-				return -1;
-			}
-			if (con) {
-				if (setfilecon(dest, con) == -1) {
-					bb_perror_msg("setfilecon:%s,%s", dest, con);
-					freecon(con);
-					return -1;
-				}
-				freecon(con);
-			}
-		}
-#endif
 #if ENABLE_FEATURE_CP_REFLINK
 # undef BTRFS_IOCTL_MAGIC
 # define BTRFS_IOCTL_MAGIC 0x94

@@ -115,28 +115,11 @@ CFLAGS += $(call cc-option,-fsanitize=undefined,)
 endif
 
 # If arch/$(ARCH)/Makefile did not override it (with, say, -fPIC)...
-ARCH_FPIC ?= -fpic
 ARCH_FPIE ?= -fpie
 ARCH_PIE ?= -pie
 
-# Usage: $(eval $(call pkg_check_modules,VARIABLE-PREFIX,MODULES))
-define pkg_check_modules
-$(1)_CFLAGS := $(shell $(PKG_CONFIG) $(PKG_CONFIG_FLAGS) --cflags $(2))
-$(1)_LIBS := $(shell $(PKG_CONFIG) $(PKG_CONFIG_FLAGS) --libs $(2))
-endef
-
-ifeq ($(CONFIG_BUILD_LIBBUSYBOX),y)
-# on i386: 14% smaller libbusybox.so
-# (code itself is 9% bigger, we save on relocs/PLT/GOT)
-CFLAGS += $(ARCH_FPIC)
-# and another 4% reduction of libbusybox.so:
-# (external entry points must be marked EXTERNALLY_VISIBLE)
-CFLAGS += $(call cc-option,-fvisibility=hidden)
-endif
-
 ifeq ($(CONFIG_STATIC),y)
 CFLAGS_busybox += -static
-PKG_CONFIG_FLAGS += --static
 endif
 
 ifeq ($(CONFIG_PIE),y)
@@ -189,28 +172,6 @@ LDLIBS += rt
 endif
 endif
 
-# libpam may use libpthread, libdl and/or libaudit.
-# On some platforms that requires an explicit -lpthread, -ldl, -laudit.
-# However, on *other platforms* it fails when some of those flags
-# given needlessly. On some systems, crypt needs pthread.
-#
-# I even had a system where a runtime test for pthread
-# (similar to CRYPT_AVAILABLE test above) was not reliable.
-#
-# Do not propagate this mess by adding libraries to CONFIG_PAM/CRYPT_AVAILABLE blocks.
-# Add libraries you need to CONFIG_EXTRA_LDLIBS instead.
-
-ifeq ($(CONFIG_PAM),y)
-LDLIBS += pam pam_misc
-endif
-
-ifeq ($(CONFIG_SELINUX),y)
-SELINUX_PC_MODULES = libselinux libsepol
-$(eval $(call pkg_check_modules,SELINUX,$(SELINUX_PC_MODULES)))
-CPPFLAGS += $(SELINUX_CFLAGS)
-LDLIBS += $(if $(SELINUX_LIBS),$(SELINUX_LIBS:-l%=%),$(SELINUX_PC_MODULES:lib%=%))
-endif
-
 ifeq ($(CONFIG_FEATURE_NSLOOKUP_BIG),y)
 ifneq (,$(findstring linux,$(shell $(CC) $(CFLAGS) -dumpmachine)))
 LDLIBS += resolv
@@ -218,14 +179,6 @@ endif
 ifneq (,$(findstring gnu,$(shell $(CC) $(CFLAGS) -dumpmachine)))
 LDLIBS += resolv
 endif
-endif
-
-ifeq ($(CONFIG_EFENCE),y)
-LDLIBS += efence
-endif
-
-ifeq ($(CONFIG_DMALLOC),y)
-LDLIBS += dmalloc
 endif
 
 ifneq ($(CONFIG_EXTRA_LDFLAGS),)

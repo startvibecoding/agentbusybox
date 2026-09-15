@@ -27,9 +27,8 @@ config USE_BB_PWD_GRP
 	Enabling this option will cause busybox to directly access the
 	system's /etc/password, /etc/group files (and your system will be
 	smaller, and I will get fewer emails asking about how glibc NSS
-	works). When this option is enabled, you will not be able to use
-	PAM to access remote LDAP password servers and whatnot. And if you
-	want hostname resolution to work with glibc, you still need the
+	works). And if you want hostname resolution to work with glibc,
+	you still need the
 	/lib/libnss_* libraries.
 
 	If you need to use glibc's nsswitch.conf mechanism
@@ -53,9 +52,7 @@ config USE_BB_SHADOW
 	Enabling this option will cause busybox to directly access the
 	system's /etc/shadow file when handling shadow passwords. This
 	makes your system smaller (and I will get fewer emails asking about
-	how glibc NSS works). When this option is enabled, you will not be
-	able to use PAM to access shadow passwords from remote LDAP
-	password servers and whatnot.
+	how glibc NSS works).
 
 config USE_BB_CRYPT
 	bool "Use internal crypt functions"

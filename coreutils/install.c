@@ -34,9 +34,7 @@
 //usage:     "\n	-g GRP	Set group ownership"
 //usage:     "\n	-m MODE	Set permissions"
 //usage:     "\n	-t DIR	Install to DIR"
-//usage:	IF_SELINUX(
-//usage:     "\n	-Z	Set security context"
-//usage:	)
+//usage:	
 
 #include "libbb.h"
 #include "libcoreutils/coreutils.h"
@@ -55,11 +53,6 @@ static const char install_longopts[] ALIGN1 =
 	"target-directory\0"	Required_argument "t"
 /* autofs build insists of using -b --suffix=.orig */
 /* TODO? (short option for --suffix is -S) */
-# if ENABLE_SELINUX
-	"context\0"             Required_argument "Z"
-	"preserve_context\0"    No_argument       "\xff"
-	"preserve-context\0"    No_argument       "\xff"
-# endif
 	;
 # define GETOPT32 getopt32long
 # define LONGOPTS install_longopts,
@@ -69,38 +62,6 @@ static const char install_longopts[] ALIGN1 =
 #endif
 
 
-#if ENABLE_SELINUX
-static void setdefaultfilecon(const char *path)
-{
-	struct stat s;
-	security_context_t scontext = NULL;
-
-	if (!is_selinux_enabled()) {
-		return;
-	}
-	if (lstat(path, &s) != 0) {
-		return;
-	}
-
-	if (matchpathcon(path, s.st_mode, &scontext) < 0) {
-		goto out;
-	}
-	if (strcmp(scontext, "<<none>>") == 0) {
-		goto out;
-	}
-
-	if (lsetfilecon(path, scontext) < 0) {
-		if (errno != ENOTSUP) {
-			bb_perror_msg("warning: can't change context"
-					" of %s to %s", path, scontext);
-		}
-	}
-
- out:
-	freecon(scontext);
-}
-
-#endif
 
 int install_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
 int install_main(int argc, char **argv)
@@ -118,10 +79,6 @@ int install_main(int argc, char **argv)
 	int opts;
 	int ret = EXIT_SUCCESS;
 	int isdir;
-#if ENABLE_SELINUX
-	security_context_t scontext;
-	bool use_default_selinux_context = 1;
-#endif
 	enum {
 		OPT_c             = 1 << 0,
 		OPT_v             = 1 << 1,
@@ -134,39 +91,22 @@ int install_main(int argc, char **argv)
 		OPT_MODE          = 1 << 8,
 		OPT_OWNER         = 1 << 9,
 		OPT_TARGET        = 1 << 10,
-#if ENABLE_SELINUX
-		OPT_SET_SECURITY_CONTEXT = 1 << 11,
-		OPT_PRESERVE_SECURITY_CONTEXT = 1 << 12,
-#endif
 	};
 
 	/* -c exists for backwards compatibility, it's needed */
 	/* -b is ignored ("make a backup of each existing destination file") */
 	opts = GETOPT32(argv, "^"
-		"cvb" "Ddpsg:m:o:t:" IF_SELINUX("Z:")
+		"cvb" "Ddpsg:m:o:t:" 
 		"\0"
 		"t--d:d--t:s--d:d--s"
-		IF_FEATURE_INSTALL_LONG_OPTIONS(IF_SELINUX(":Z--\xff:\xff--Z")),
+		IF_FEATURE_INSTALL_LONG_OPTIONS(),
 		LONGOPTS
 		&gid_str, &mode_str, &uid_str, &last
-		IF_SELINUX(, &scontext)
+		
 	);
 	argc -= optind;
 	argv += optind;
 
-#if ENABLE_SELINUX
-	if (opts & (OPT_PRESERVE_SECURITY_CONTEXT|OPT_SET_SECURITY_CONTEXT)) {
-		selinux_or_die();
-		use_default_selinux_context = 0;
-		if (opts & OPT_PRESERVE_SECURITY_CONTEXT) {
-			copy_flags |= FILEUTILS_PRESERVE_SECURITY_CONTEXT;
-		}
-		if (opts & OPT_SET_SECURITY_CONTEXT) {
-			setfscreatecon_or_die(scontext);
-			copy_flags |= FILEUTILS_SET_SECURITY_CONTEXT;
-		}
-	}
-#endif
 
 	if ((opts & OPT_v) && FILEUTILS_VERBOSE) {
 		mkdir_flags |= FILEUTILS_VERBOSE;
@@ -259,10 +199,6 @@ int install_main(int argc, char **argv)
 			bb_perror_msg("can't change %s of %s", "permissions", dest);
 			ret = EXIT_FAILURE;
 		}
-#if ENABLE_SELINUX
-		if (use_default_selinux_context)
-			setdefaultfilecon(dest);
-#endif
  next:
 		if (ENABLE_FEATURE_CLEAN_UP && isdir)
 			free(dest);

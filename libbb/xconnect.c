@@ -11,9 +11,6 @@
 #include <netinet/in.h>
 #include <net/if.h>
 #include <sys/un.h>
-#if ENABLE_IFPLUGD || ENABLE_FEATURE_MDEV_DAEMON || ENABLE_UEVENT
-# include <linux/netlink.h>
-#endif
 #include "libbb.h"
 
 int FAST_FUNC setsockopt_int(int fd, int level, int optname, int optval)
@@ -393,41 +390,6 @@ int FAST_FUNC create_and_bind_dgram_or_die(const char *bindaddr, int port)
 }
 
 
-#if ENABLE_IFPLUGD || ENABLE_FEATURE_MDEV_DAEMON || ENABLE_UEVENT
-int FAST_FUNC create_and_bind_to_netlink(int proto, int grp, unsigned rcvbuf)
-{
-	struct sockaddr_nl sa;
-	int fd;
-
-	fd = xsocket(AF_NETLINK, SOCK_DGRAM, proto);
-
-	/* Set receive buffer size before binding the socket
-	 * We want to have enough space before we start receiving messages.
-	 */
-	if (rcvbuf != 0) {
-		setsockopt_SOL_SOCKET_int(fd, SO_RCVBUF, rcvbuf);
-		/* SO_RCVBUFFORCE (root only) can go above net.core.rmem_max */
-		setsockopt_SOL_SOCKET_int(fd, SO_RCVBUFFORCE, rcvbuf);
-# if 0
-		{
-			int z;
-			socklen_t zl = sizeof(z);
-			getsockopt(fd, SOL_SOCKET, SO_RCVBUF, &z, &zl);
-			bb_error_msg("SO_RCVBUF:%d", z);
-		}
-# endif
-	}
-
-	memset(&sa, 0, sizeof(sa));
-	sa.nl_family = AF_NETLINK;
-	sa.nl_pid = getpid();
-	sa.nl_groups = grp;
-	xbind(fd, (struct sockaddr *) &sa, sizeof(sa));
-	close_on_exec_on(fd);
-
-	return fd;
-}
-#endif
 
 int FAST_FUNC create_and_connect_stream_or_die(const char *peer, int port)
 {

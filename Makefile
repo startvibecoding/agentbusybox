@@ -215,7 +215,6 @@ NM	= $(CROSS_COMPILE)nm
 STRIP	= $(CROSS_COMPILE)strip
 OBJDUMP	= $(CROSS_COMPILE)objdump
 WINDRES	= $(CROSS_COMPILE)windres
-PKG_CONFIG	?= $(CROSS_COMPILE)pkg-config
 
 # Handle MSYS2 weirdness
 ifneq ($(CROSS_COMPILE),)

@@ -344,14 +344,6 @@
 #if ENABLE_PLATFORM_MINGW32
 # include "BB_VER.h"
 #endif
-#if ENABLE_PAM
-/* PAM may include <locale.h>. We may need to undefine bbox's stub define: */
-# undef setlocale
-/* For some obscure reason, PAM is not in pam/xxx, but in security/xxx.
- * Apparently they like to confuse people. */
-# include <security/pam_appl.h>
-# include <security/pam_misc.h>
-#endif
 #if ENABLE_FEATURE_USE_SENDFILE
 # include <sys/sendfile.h>
 #endif
@@ -2237,54 +2229,6 @@ static void if_ip_denied_send_HTTP_FORBIDDEN_and_exit(unsigned remote_ip)
 
 #if ENABLE_FEATURE_HTTPD_BASIC_AUTH
 
-# if ENABLE_PAM
-struct pam_userinfo {
-	const char *name;
-	const char *pw;
-};
-
-static int pam_talker(int num_msg,
-		const struct pam_message **msg,
-		struct pam_response **resp,
-		void *appdata_ptr)
-{
-	int i;
-	struct pam_userinfo *userinfo = (struct pam_userinfo *) appdata_ptr;
-	struct pam_response *response;
-
-	if (!resp || !msg || !userinfo)
-		return PAM_CONV_ERR;
-
-	/* allocate memory to store response */
-	response = xzalloc(num_msg * sizeof(*response));
-
-	/* copy values */
-	for (i = 0; i < num_msg; i++) {
-		const char *s;
-
-		switch (msg[i]->msg_style) {
-		case PAM_PROMPT_ECHO_ON:
-			s = userinfo->name;
-			break;
-		case PAM_PROMPT_ECHO_OFF:
-			s = userinfo->pw;
-			break;
-		case PAM_ERROR_MSG:
-		case PAM_TEXT_INFO:
-			s = "";
-			break;
-		default:
-			free(response);
-			return PAM_CONV_ERR;
-		}
-		response[i].resp = xstrdup(s);
-		if (PAM_SUCCESS != 0)
-			response[i].resp_retcode = PAM_SUCCESS;
-	}
-	*resp = response;
-	return PAM_SUCCESS;
-}
-# endif
 
 /*
  * Config file entries are of the form "/<path>:<user>:<passwd>".
@@ -2338,7 +2282,7 @@ static int check_user_passwd(const char *path, char *user_and_passwd)
 		if (ENABLE_FEATURE_HTTPD_AUTH_MD5) {
 			char *colon_after_user;
 			const char *passwd;
-# if ENABLE_FEATURE_SHADOWPASSWDS && !ENABLE_PAM
+# if ENABLE_FEATURE_SHADOWPASSWDS
 			char sp_buf[256];
 # endif
 
@@ -2370,24 +2314,6 @@ static int check_user_passwd(const char *path, char *user_and_passwd)
 			passwd++;
 # if !ENABLE_PLATFORM_MINGW32
 			if (passwd[0] == '*') {
-# if ENABLE_PAM
-				struct pam_userinfo userinfo;
-				struct pam_conv conv_info = { &pam_talker, (void *) &userinfo };
-				pam_handle_t *pamh;
-
-				*colon_after_user = '\0';
-				userinfo.name = user_and_passwd;
-				userinfo.pw = colon_after_user + 1;
-				r = pam_start("httpd", user_and_passwd, &conv_info, &pamh) != PAM_SUCCESS;
-				if (r == 0) {
-					r = pam_authenticate(pamh, PAM_DISALLOW_NULL_AUTHTOK) != PAM_SUCCESS
-					 || pam_acct_mgmt(pamh, PAM_DISALLOW_NULL_AUTHTOK)    != PAM_SUCCESS
-					;
-					pam_end(pamh, PAM_SUCCESS);
-				}
-				*colon_after_user = ':';
-				goto end_check_passwd;
-# else
 #  if ENABLE_FEATURE_SHADOWPASSWDS
 				/* Using _r function to avoid pulling in static buffers */
 				struct spwd spw;
@@ -2414,14 +2340,13 @@ static int check_user_passwd(const char *path, char *user_and_passwd)
 				 * it came from /etc/passwd or /etc/shadow!
 				 */
 				goto check_encrypted;
-# endif /* ENABLE_PAM */
 			}
 # endif /* !ENABLE_PLATFORM_MINGW32 */
 			/* Else: passwd is from httpd.conf, it is either plaintext or encrypted */
 
 			if (passwd[0] == '$' && isdigit(passwd[1])) {
 				char *encrypted;
-# if !ENABLE_PAM && !ENABLE_PLATFORM_MINGW32
+# if !ENABLE_PLATFORM_MINGW32
  check_encrypted:
 # endif
 				/* encrypt pwd from peer and check match with local one */

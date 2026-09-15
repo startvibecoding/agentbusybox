@@ -103,14 +103,6 @@
 //config:	default y
 //config:	depends on TAR
 //config:
-//config:config FEATURE_TAR_SELINUX
-//config:	bool "Support extracting SELinux labels"
-//config:	default n
-//config:	depends on TAR && SELINUX
-//config:	help
-//config:	With this option busybox supports restoring SELinux labels
-//config:	when extracting files from tar archives.
-
 //applet:IF_TAR(APPLET(tar, BB_DIR_BIN, BB_SUID_DROP))
 
 //kbuild:lib-$(CONFIG_TAR) += tar.o

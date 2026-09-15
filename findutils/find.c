@@ -271,13 +271,6 @@
 //config:	help
 //config:	The -regex option matches whole pathname against regular expression.
 //config:
-//config:config FEATURE_FIND_CONTEXT
-//config:	bool "Enable -context: security context matching"
-//config:	default n
-//config:	depends on FIND && SELINUX
-//config:	help
-//config:	Support the 'find -context' option for matching security context.
-//config:
 //config:config FEATURE_FIND_LINKS
 //config:	bool "Enable -links: link count matching"
 //config:	default y
@@ -381,9 +374,6 @@
 //usage:     "\n	-links N	Number of links is greater than (+N), less than (-N),"
 //usage:     "\n			or exactly N"
 //usage:	)
-//usage:	IF_FEATURE_FIND_CONTEXT(
-//usage:     "\n	-context CTX	File has specified security context"
-//usage:	)
 //usage:	IF_FEATURE_FIND_EMPTY(
 //usage:     "\n	-empty		Match empty file/directory"
 //usage:	)
@@ -467,7 +457,6 @@ IF_FEATURE_FIND_INUM(   ACTS(inum,  ino_t inode_num;))
 IF_FEATURE_FIND_SAMEFILE(ACTS(samefile, ino_t inode_num; dev_t device;))
 IF_FEATURE_FIND_USER(   ACTS(user,  uid_t uid;))
 IF_FEATURE_FIND_SIZE(   ACTS(size,  char size_char; off_t size;))
-IF_FEATURE_FIND_CONTEXT(ACTS(context, security_context_t context;))
 IF_FEATURE_FIND_PAREN(  ACTS(paren, action ***subexpr;))
 IF_FEATURE_FIND_PRUNE(  ACTS(prune))
 IF_FEATURE_FIND_QUIT(   ACTS(quit))
@@ -980,24 +969,6 @@ ACTF(empty)
 	return S_ISREG(statbuf->st_mode) && statbuf->st_size == 0;
 }
 #endif
-#if ENABLE_FEATURE_FIND_CONTEXT
-ACTF(context)
-{
-	security_context_t con;
-	int rc;
-
-	if (G.recurse_flags & ACTION_FOLLOWLINKS) {
-		rc = getfilecon(fileName, &con);
-	} else {
-		rc = lgetfilecon(fileName, &con);
-	}
-	if (rc < 0)
-		return FALSE;
-	rc = strcmp(ap->context, con);
-	freecon(con);
-	return rc == 0;
-}
-#endif
 #if ENABLE_FEATURE_FIND_LINKS
 ACTF(links)
 {
@@ -1175,7 +1146,6 @@ static action*** parse_params(char **argv)
 	IF_FEATURE_FIND_USER(   PARM_user      ,)
 	IF_FEATURE_FIND_GROUP(  PARM_group     ,)
 	IF_FEATURE_FIND_SIZE(   PARM_size      ,)
-	IF_FEATURE_FIND_CONTEXT(PARM_context   ,)
 	IF_FEATURE_FIND_LINKS(  PARM_links     ,)
 	IF_FEATURE_FIND_MAXDEPTH(OPT_MINDEPTH,OPT_MAXDEPTH,)
 	};
@@ -1225,7 +1195,6 @@ static action*** parse_params(char **argv)
 	IF_FEATURE_FIND_USER(   "-user\0"   )
 	IF_FEATURE_FIND_GROUP(  "-group\0"  )
 	IF_FEATURE_FIND_SIZE(   "-size\0"   )
-	IF_FEATURE_FIND_CONTEXT("-context\0")
 	IF_FEATURE_FIND_LINKS(  "-links\0"  )
 	IF_FEATURE_FIND_MAXDEPTH("-mindepth\0""-maxdepth\0")
 	;
@@ -1629,17 +1598,6 @@ static action*** parse_params(char **argv)
 			ap = ALLOC_ACTION(size);
 			ap->size_char = arg1[0];
 			ap->size = XATOU_SFX(plus_minus_num(arg1), find_suffixes);
-		}
-#endif
-#if ENABLE_FEATURE_FIND_CONTEXT
-		else if (parm == PARM_context) {
-			action_context *ap;
-			dbg("%d", __LINE__);
-			ap = ALLOC_ACTION(context);
-			/*ap->context = NULL; - ALLOC_ACTION did it */
-			/* SELinux headers erroneously declare non-const parameter */
-			if (selinux_raw_to_trans_context((char*)arg1, &ap->context))
-				bb_simple_perror_msg(arg1);
 		}
 #endif
 #if ENABLE_FEATURE_FIND_LINKS

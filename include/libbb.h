@@ -85,10 +85,6 @@
  * of struct sysinfo (only in some toolchanins), which breaks build.
  * Include sys/sysinfo.h only in those files which need it.
  */
-#if ENABLE_SELINUX
-# include <selinux/selinux.h>
-# include <selinux/context.h>
-#endif
 #if ENABLE_FEATURE_UTMP
 # if defined __UCLIBC__ && ( \
     (UCLIBC_VERSION >= KERNEL_VERSION(0, 9, 32) \
@@ -549,24 +545,18 @@ enum {	/* cp.c, mv.c, install.c depend on these values. CAREFUL when changing th
 	FILEUTILS_UPDATE          = 1 << 14, /* -u */
 	FILEUTILS_NO_TARGET_DIR	  = 1 << 15, /* -T */
 	FILEUTILS_TARGET_DIR	  = 1 << 16, /* -t DIR */
-#if ENABLE_SELINUX
-	FILEUTILS_PRESERVE_SECURITY_CONTEXT = 1 << 17, /* -c */
-#endif
-#define FILEUTILS_CP_OPTSTR "pdRfinlsLHarPvuTt:" IF_SELINUX("c")
+#define FILEUTILS_CP_OPTSTR "pdRfinlsLHarPvuTt:"
 /* How many bits in FILEUTILS_CP_OPTSTR? */
-	FILEUTILS_CP_OPTBITS      = 18 - !ENABLE_SELINUX,
+	FILEUTILS_CP_OPTBITS      = 17,
 
-	FILEUTILS_RMDEST          = 1 << (19 - !ENABLE_SELINUX), /* cp --remove-destination */
-	/* bit 18 skipped for "cp --parents" */
-	FILEUTILS_REFLINK         = 1 << (20 - !ENABLE_SELINUX), /* cp --reflink=auto */
-	FILEUTILS_REFLINK_ALWAYS  = 1 << (21 - !ENABLE_SELINUX), /* cp --reflink[=always] */
+	FILEUTILS_RMDEST          = 1 << 18, /* cp --remove-destination */
+	/* bit 17 skipped for "cp --parents" */
+	FILEUTILS_REFLINK         = 1 << 19, /* cp --reflink=auto */
+	FILEUTILS_REFLINK_ALWAYS  = 1 << 20, /* cp --reflink[=always] */
 	/*
 	 * Hole. cp may have some bits set here,
 	 * they should not affect remove_file()/copy_file()
 	 */
-#if ENABLE_SELINUX
-	FILEUTILS_SET_SECURITY_CONTEXT = 1 << 30,
-#endif
 	FILEUTILS_IGNORE_CHMOD_ERR = 1 << 31,
 };
 
@@ -944,7 +934,6 @@ int xsocket_stream(len_and_sockaddr **lsap) FAST_FUNC;
 /* NB: these set SO_REUSEADDR before bind */
 int create_and_bind_stream_or_die(const char *bindaddr, int port) FAST_FUNC;
 int create_and_bind_dgram_or_die(const char *bindaddr, int port) FAST_FUNC;
-int create_and_bind_to_netlink(int proto, int grp, unsigned rcvbuf) FAST_FUNC;
 /* Create client TCP socket connected to peer:port. Peer cannot be NULL.
  * Peer can be numeric IP ("N.N.N.N"), numeric IPv6 address or hostname,
  * and can have ":PORT" suffix (for IPv6 use "[X:X:...:X]:PORT").
@@ -1767,14 +1756,10 @@ static inline void __attribute__ ((deprecated("use bb_simple_info_msg instead"))
 #endif
 #endif
 
-/* We need to export XXX_main from libbusybox
- * only if we build "individual" binaries
+/* applet_main[] symbols are referenced from the generated dispatch
+ * code in the same binary; they never need to be "externally visible"
  */
-#if ENABLE_FEATURE_INDIVIDUAL
-#define MAIN_EXTERNALLY_VISIBLE EXTERNALLY_VISIBLE
-#else
 #define MAIN_EXTERNALLY_VISIBLE
-#endif
 
 /* Embedded script support */
 char *get_script_content(unsigned n) FAST_FUNC;
@@ -1864,7 +1849,6 @@ extern int fstype_matches(const char *fstype, const char *comma_list) FAST_FUNC;
 #ifdef HAVE_MNTENT_H
 extern struct mntent *find_mount_point(const char *name, int subdir_too) FAST_FUNC;
 #endif
-extern void erase_mtab(const char * name) FAST_FUNC;
 extern unsigned int tty_baud_to_value(speed_t speed) FAST_FUNC;
 extern speed_t tty_value_to_baud(unsigned int value) FAST_FUNC;
 #if ENABLE_DESKTOP
@@ -1976,17 +1960,6 @@ void exec_prog_or_SHELL(char **argv) NORETURN FAST_FUNC;
 const char *get_shell_name(void) FAST_FUNC;
 
 
-#if ENABLE_SELINUX
-extern void renew_current_security_context(void) FAST_FUNC;
-extern void set_current_security_context(security_context_t sid) FAST_FUNC;
-extern context_t set_security_context_component(security_context_t cur_context,
-						char *user, char *role, char *type, char *range) FAST_FUNC;
-extern void setfscreatecon_or_die(security_context_t scontext) FAST_FUNC;
-extern void selinux_preserve_fcontext(int fdesc) FAST_FUNC;
-#else
-#define selinux_preserve_fcontext(fdesc) ((void)0)
-#endif
-extern void selinux_or_die(void) FAST_FUNC;
 
 
 /* setup_environment:
@@ -2315,7 +2288,7 @@ typedef struct procps_status_t {
 	uint16_t argv_len;
 	char *argv0;
 	char *exe;
-	IF_SELINUX(char *context;)
+	
 	IF_FEATURE_SHOW_THREADS(unsigned main_thread_pid;)
 	/* Everything below must contain no ptrs to malloc'ed data:
 	 * it is memset(0) for each process in procps_scan() */
@@ -2364,7 +2337,6 @@ enum {
 				|| ENABLE_PGREP || ENABLE_PKILL
 				|| ENABLE_PIDOF
 				),
-	PSSCAN_CONTEXT  = (1 << 16) * ENABLE_SELINUX,
 	PSSCAN_START_TIME = 1 << 17,
 	PSSCAN_NICE     = (1 << 18) * ENABLE_FEATURE_PS_ADDITIONAL_COLUMNS,
 	PSSCAN_RUIDGID  = (1 << 19) * ENABLE_FEATURE_PS_ADDITIONAL_COLUMNS,
@@ -2639,9 +2611,9 @@ extern const char bb_hexdigits_upcase[] ALIGN1;
 
 extern const char bb_path_wtmp_file[] ALIGN1;
 
-/* Busybox mount uses either /proc/mounts or /etc/mtab to
- * get the list of currently mounted filesystems */
-#define bb_path_mtab_file IF_FEATURE_MTAB_SUPPORT("/etc/mtab")IF_NOT_FEATURE_MTAB_SUPPORT("/proc/mounts")
+/* Busybox uses /proc/mounts to get the list of
+ * currently mounted filesystems */
+#define bb_path_mtab_file "/proc/mounts"
 
 #define bb_path_passwd_file  _PATH_PASSWD
 #define bb_path_group_file   _PATH_GROUP

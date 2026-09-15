@@ -28,25 +28,7 @@
  * SUCH DAMAGE.
  */
 #include "libbb.h"
-#if ENABLE_SELINUX
-#include <selinux/selinux.h>  /* for setexeccon  */
-#endif
 
-#if ENABLE_SELINUX
-static security_context_t current_sid;
-
-void FAST_FUNC renew_current_security_context(void)
-{
-	freecon(current_sid);  /* Release old context  */
-	getcon(&current_sid);  /* update */
-}
-void FAST_FUNC set_current_security_context(security_context_t sid)
-{
-	freecon(current_sid);  /* Release old context  */
-	current_sid = sid;
-}
-
-#endif
 
 /* Exec SHELL, or DEFAULT_SHELL if SHELL is "" or NULL.
  * If ADDITIONAL_ARGS is not NULL, pass them to the shell.
@@ -74,12 +56,6 @@ void FAST_FUNC exec_shell(const char *shell, int loginshell, const char **additi
 			args[++cnt] = *additional_args++;
 	}
 
-#if ENABLE_SELINUX
-	if (current_sid)
-		setexeccon(current_sid);
-	if (ENABLE_FEATURE_CLEAN_UP)
-		freecon(current_sid);
-#endif
 	execv(shell, (char **) args);
 	bb_perror_msg_and_die("can't execute '%s'", shell);
 }
