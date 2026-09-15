@@ -71,32 +71,10 @@ endif
 check test: busybox busybox.links
 	$(UNIT_CMD)
 	test -d $(objtree)/testsuite || cp -pPR $(srctree)/testsuite $(objtree)
+	@# testing.sh compiles ../scripts/echo.c relative to the copied testsuite:
+	test -f $(objtree)/scripts/echo.c || { mkdir -p $(objtree)/scripts && cp -p $(srctree)/scripts/echo.c $(objtree)/scripts/; }
 	bindir=$(objtree) srcdir=$(srctree)/testsuite \
 	$(SHELL) -c "cd $(objtree)/testsuite && $(srctree)/testsuite/runtest $(if $(KBUILD_VERBOSE:0=),-v)"
-
-.PHONY: release
-release: distclean
-	cd ..; \
-	rm -r -f busybox-$(VERSION).$(PATCHLEVEL).$(SUBLEVEL)$(EXTRAVERSION); \
-	cp -pPR busybox busybox-$(VERSION).$(PATCHLEVEL).$(SUBLEVEL)$(EXTRAVERSION) && { \
-	find busybox-$(VERSION).$(PATCHLEVEL).$(SUBLEVEL)$(EXTRAVERSION)/ -type d \
-		-name .svn \
-		-print \
-		-exec rm -r -f {} \; ; \
-	find busybox-$(VERSION).$(PATCHLEVEL).$(SUBLEVEL)$(EXTRAVERSION)/ -type d \
-		-name .git \
-		-print \
-		-exec rm -r -f {} \; ; \
-	find busybox-$(VERSION).$(PATCHLEVEL).$(SUBLEVEL)$(EXTRAVERSION)/ -type f \
-		-name .gitignore \
-		-print \
-		-exec rm -f {} \; ; \
-	find busybox-$(VERSION).$(PATCHLEVEL).$(SUBLEVEL)$(EXTRAVERSION)/ -type f \
-		-name .\#* \
-		-print \
-		-exec rm -f {} \; ; \
-	tar -czf busybox-$(VERSION).$(PATCHLEVEL).$(SUBLEVEL)$(EXTRAVERSION).tar.gz \
-		busybox-$(VERSION).$(PATCHLEVEL).$(SUBLEVEL)$(EXTRAVERSION)/ ; }
 
 .PHONY: checkhelp
 checkhelp:
@@ -173,29 +151,5 @@ docs/busybox.net/BusyBox.html: docs/busybox.pod
 	$(Q)-mkdir -p docs/busybox.net
 	$(Q)-pod2html --noindex $< > $@
 	$(Q)-rm -f pod2htm*
-
-# documentation, cross-reference
-# Modern distributions already ship synopsis packages (e.g. debian)
-# If you have an old distribution go to http://synopsis.fresco.org/
-syn_tgt = $(wildcard $(patsubst %,%/*.c,$(busybox-alldirs)))
-syn     = $(patsubst %.c, %.syn, $(syn_tgt))
-
-comma:= ,
-brace_open:= (
-brace_close:= )
-
-SYN_CPPFLAGS := $(strip $(CPPFLAGS) $(EXTRA_CPPFLAGS))
-SYN_CPPFLAGS := $(subst $(brace_open),\$(brace_open),$(SYN_CPPFLAGS))
-SYN_CPPFLAGS := $(subst $(brace_close),\$(brace_close),$(SYN_CPPFLAGS))
-#SYN_CPPFLAGS := $(subst ",\",$(SYN_CPPFLAGS))
-#")
-#SYN_CPPFLAGS := [$(patsubst %,'%'$(comma),$(SYN_CPPFLAGS))'']
-
-%.syn: %.c
-	synopsis -p C -l Comments.SSDFilter,Comments.Previous -Wp,preprocess=True,cppflags="'$(SYN_CPPFLAGS)'" -o $@ $<
-
-.PHONY: html
-html: $(syn)
-	synopsis -f HTML -Wf,title="'BusyBox Documentation'" -o $@ $^
 
 -include $(srctree)/Makefile.local

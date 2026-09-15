@@ -228,23 +228,7 @@ ifeq ($(CONFIG_DMALLOC),y)
 LDLIBS += dmalloc
 endif
 
-# If a flat binary should be built, CFLAGS_busybox="-elf2flt"
-# env var should be set for make invocation.
-# Here we check whether CFLAGS_busybox indeed contains that flag.
-# (For historical reasons, we also check LDFLAGS, which doesn't
-# seem to be entirely correct variable to put "-elf2flt" into).
-W_ELF2FLT = -elf2flt
-ifneq (,$(findstring $(W_ELF2FLT),$(LDFLAGS) $(CFLAGS_busybox)))
-SKIP_STRIP = y
-endif
-
 ifneq ($(CONFIG_EXTRA_LDFLAGS),)
 LDFLAGS += $(strip $(subst ",,$(CONFIG_EXTRA_LDFLAGS)))
 #"))
 endif
-
-# Busybox is a stack-fatty so make sure we increase default size
-# TODO: use "make stksizes" to find & fix big stack users
-# (we stole scripts/checkstack.pl from the kernel... thanks guys!)
-# Reduced from 20k to 16k in 1.9.0.
-FLTFLAGS += -s 16000
