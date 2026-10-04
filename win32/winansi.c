@@ -1552,6 +1552,60 @@ static int writeCon_utf8(int fd, const char *u8buf, size_t u8siz)
 }
 #endif
 
+#if ENABLE_FEATURE_UTF8_CONSOLE
+/*
+ * Normalize the console and the child environment to UTF8, so that output
+ * of programs such as Python/PowerShell/cmd stays consistent with BusyBox's
+ * internal UTF8 encoding (which the UTF8 manifest enables):
+ *
+ * - inject PYTHONIOENCODING=utf-8 and PYTHONUTF8=1 (unless already set) so
+ *   that Python uses UTF8 for piped/redirected stdio as well,
+ * - if a console is attached, switch its input/output codepages to 65001
+ *   (restored at exit).  Programs which inspect the console codepage
+ *   (PowerShell, cmd, ...) then exchange UTF8 with us and with each other.
+ *
+ * Set BB_SKIP_UTF8_CONSOLE in the environment to skip the codepage change.
+ */
+static UINT saved_console_cp[2];
+
+static void restore_console_cp(void)
+{
+	SetConsoleCP(saved_console_cp[0]);
+	SetConsoleOutputCP(saved_console_cp[1]);
+}
+
+void FAST_FUNC console_utf8_init(void)
+{
+	static int done = 0;
+	UINT cp_in, cp_out;
+
+	if (done)
+		return;
+	done = 1;
+
+	/* set only if not already set (replace=0) */
+	setenv("PYTHONIOENCODING", "utf-8", 0);
+	setenv("PYTHONUTF8", "1", 0);
+
+	if (getenv(BB_SKIP_UTF8_CONSOLE) || GetACP() != CP_UTF8)
+		return;
+
+	cp_in = GetConsoleCP();
+	cp_out = GetConsoleOutputCP();
+	if (!cp_out || cp_out == CP_UTF8)
+		return;  /* no console attached, or already UTF8 */
+
+	if (SetConsoleOutputCP(CP_UTF8)) {
+		saved_console_cp[0] = cp_in;
+		saved_console_cp[1] = cp_out;
+		atexit(restore_console_cp);
+		/* failing to switch the input CP (e.g. no input) is ok */
+		if (cp_in && cp_in != CP_UTF8)
+			SetConsoleCP(CP_UTF8);
+	}
+}
+#endif
+
 void FAST_FUNC console_write(const char *str, int len)
 {
 	char *buf = xmemdup(str, len);

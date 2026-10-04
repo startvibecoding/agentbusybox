@@ -278,6 +278,12 @@ permissions are emulated; device-file emulation provides `/dev/null`, `/dev/tty`
   set `BB_OVERRIDE_APPLETS` (space-separated applet names) to force the use of external programs
 - **Terminal modes**: the best terminal handling is auto-detected; `BB_TERMINAL_MODE=1` forces literal
   ANSI escapes, `BB_TERMINAL_MODE=0` forces Windows console API emulation
+- **UTF-8 child processes** (UTF-8 builds, `FEATURE_UTF8_CONSOLE`): at startup the console codepages
+  are switched to UTF-8 (65001, restored at exit) and `PYTHONIOENCODING=utf-8` / `PYTHONUTF8=1` are
+  set if unset, so output of Python / PowerShell / cmd children stays UTF-8 and matches BusyBox's
+  internal encoding (no more mojibake with mixed encodings). Set `BB_SKIP_UTF8_CONSOLE` to keep the
+  console codepage unchanged; programs which still emit legacy encodings (e.g. GBK) can be piped
+  through `busybox iconv -f CP936 -t UTF-8`
 - **Device-file emulation**: `/dev/null`, `/dev/tty`, `/dev/zero`, `/dev/urandom` work in redirections
   and as arguments
 - **Paths**: always use forward slashes; UNC paths `//host/share/path`; the `-X` shell option prevents

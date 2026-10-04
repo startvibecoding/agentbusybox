@@ -522,6 +522,22 @@ config FEATURE_UTF8_OUTPUT
 	This may be useful in conjunction with the UTF8 manifest which
 	is supported in Window 10 and 11.
 
+config FEATURE_UTF8_CONSOLE
+	bool "Switch console codepage to UTF8 at startup"
+	default n
+	depends on PLATFORM_MINGW32 && FEATURE_UTF8_MANIFEST
+	help
+	  At startup, set the console input and output codepages to UTF8
+	  (65001), and restore the previous values on exit.  Child programs
+	  which use the console codepage to encode their output (cmd,
+	  PowerShell, ...) will then produce UTF8 which matches BusyBox's
+	  internal encoding, avoiding mojibake with non-ASCII text.
+	  PYTHONIOENCODING and PYTHONUTF8 are also set in the environment
+	  (if not already set) so that Python child processes use UTF8 for
+	  piped and redirected I/O too.
+	  Set BB_SKIP_UTF8_CONSOLE in the environment to skip the console
+	  codepage change.
+
 config TERMINAL_MODE
 	int "Default setting for terminal mode"
 	default 5
