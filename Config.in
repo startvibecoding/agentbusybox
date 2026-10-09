@@ -522,6 +522,26 @@ config FEATURE_UTF8_OUTPUT
 	This may be useful in conjunction with the UTF8 manifest which
 	is supported in Window 10 and 11.
 
+config FEATURE_UTF8_AUTODETECT
+	bool "Autodetect console output encoding (UTF8/legacy mix) (1.5 kb)"
+	default n
+	depends on PLATFORM_MINGW32
+	help
+	Console output may mix UTF8 encoded data (BusyBox's internal
+	encoding, and UTF8-aware child processes) with data encoded in a
+	legacy code page (e.g. the GBK/CP936 output of cmd, dir and other
+	programs that use the console codepage or the system ACP).
+	When enabled, each run of non-ASCII bytes is decoded as UTF8 if it
+	is valid UTF8 (strictly: overlong forms, surrogates and out-of-range
+	codepoints are rejected), otherwise it is decoded using the legacy
+	code page; the result is written with WriteConsoleW so Chinese and
+	other multi-byte text displays correctly whichever encoder produced
+	it, with no lossy ACP->OEM recoding.
+	This takes precedence over FEATURE_UTF8_OUTPUT.
+	The legacy code page is the console output CP when it is not UTF8,
+	else the process ACP.  Set BB_CONS_ENCODING=<cp> in the environment
+	(e.g. 936 for GBK, 65001 to disable legacy decoding) to override.
+
 config FEATURE_UTF8_CONSOLE
 	bool "Switch console codepage to UTF8 at startup"
 	default n
