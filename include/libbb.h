@@ -2658,6 +2658,8 @@ extern const char bbvar[] ALIGN1;
 #define BB_TERMINAL_MODE bbafter(BB_SKIP_ANSI_EMULATION)
 #define BB_SYSTEMROOT bbafter(BB_TERMINAL_MODE)
 #define BB_CRITICAL_ERROR_DIALOGS bbafter(BB_SYSTEMROOT)
+#define BB_SKIP_UTF8_CONSOLE bbafter(BB_CRITICAL_ERROR_DIALOGS)
+#define BB_CONS_ENCODING bbafter(BB_SKIP_UTF8_CONSOLE)
 #endif
 
 extern const int const_int_0;

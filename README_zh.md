@@ -274,6 +274,11 @@ Windows 路径说明:统一使用正斜杠 `c:/path`、`//host/share/path`;
   `BB_OVERRIDE_APPLETS`(空格分隔的工具名列表)强制改用外部程序
 - **终端模式**:自动检测最佳终端处理方式;`BB_TERMINAL_MODE=1` 强制 ANSI 直通,
   `BB_TERMINAL_MODE=0` 强制用 Windows 控制台 API 仿真
+- **子进程 UTF-8 归一化**(UTF-8 构建,`FEATURE_UTF8_CONSOLE`):启动时把控制台输入/输出代码页
+  切换为 UTF-8(65001,退出时恢复),并在未设置时注入 `PYTHONIOENCODING=utf-8`、`PYTHONUTF8=1`,
+  使 Python / PowerShell / cmd 等子进程的输出统一为 UTF-8,与 BusyBox 内部编码一致,
+  避免中英混合输出乱码。设置 `BB_SKIP_UTF8_CONSOLE` 可跳过代码页切换;仍输出传统编码
+  (如 GBK)的程序可通过 `busybox iconv -f CP936 -t UTF-8` 管道转换
 - **设备文件仿真**:`/dev/null`、`/dev/tty`、`/dev/zero`、`/dev/urandom` 可用于重定向与参数
 - **路径**:一律用正斜杠;网络路径 `//host/share/path`;`-X` shell 选项可禁止把反斜杠转为正斜杠
 - **安全提示**:把 busybox 进程加入 Windows 安全中心的排除项可显著提升性能

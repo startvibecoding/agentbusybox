@@ -189,6 +189,9 @@ int winansi_getc(FILE *stream) FAST_FUNC;
 int winansi_getchar(void);
 char *winansi_fgets(char *s, int size, FILE *stream) FAST_FUNC;
 void console_write(const char *str, int len) FAST_FUNC;
+#if ENABLE_FEATURE_UTF8_CONSOLE
+void console_utf8_init(void) FAST_FUNC;
+#endif
 
 #define putchar winansi_putchar
 #define puts winansi_puts

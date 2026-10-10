@@ -73,7 +73,13 @@ mkdir -p build-win64 && make O=build-win64 mingw64_defconfig && make O=build-win
 - `win32/` — **Windows 平台层**,整个 fork 的核心。包含:
   - `mingw.c`(~2700 行):POSIX 仿真主文件(stat/open/readdir/fork 语义等)
   - `process.c`:进程与子进程管理(用 Windows 线程仿真 fork/waitpid)
-  - `winansi.c`:ANSI 转义序列与 Windows 控制台 API 之间的仿真
+  - `winansi.c`:ANSI 转义序列与 Windows 控制台 API 之间的仿真;
+    其中控制台输出经 `conv_fwriteCon`/`conv_writeCon` 做编码处理:
+    `FEATURE_UTF8_OUTPUT` 假定输出全部是 UTF-8;`FEATURE_UTF8_AUTODETECT`
+    (本 fork 新增)则对每个非 ASCII 字节段自动探测:严格合法 UTF-8 段按
+    UTF-8 解码,否则按传统代码页(默认取控制台输出 CP,非 UTF-8 时;
+    否则用进程 ACP;可用 `BB_CONS_ENCODING=<cp>` 覆盖,如 936)解码,
+    统一经 `WriteConsoleW` 写出,解决 UTF-8/GBK 等混合输出的中文乱码
   - `poll.c` / `select.c`:套接字 I/O 复用仿真;`popen.c`、`termios.c`、`mntent.c`、`glob.c`、
     `fnmatch.c`、`fnmatch2.c`、`regex*.c`(从 glibc 移植的正则)、`strptime.c` 等:libc 缺失函数补齐
   - `*.h` 影子头文件(dirent.h、glob.h、regex.h、poll.h、termios.h、mntent.h 等)
