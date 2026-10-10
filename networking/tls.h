@@ -118,13 +118,6 @@ void curve_x25519_compute_premaster(
 		const uint8_t *privkey32, const uint8_t *peerkey32,
 		uint8_t *premaster32) FAST_FUNC;
 
-#if ENABLE_SSL_SERVER
-void curve_P256_generate_keypair(
-		uint8_t *privkey32, uint8_t *pubkey2x32) FAST_FUNC;
-void curve_P256_compute_premaster(
-		const uint8_t *privkey32, const uint8_t *peerkey2x32,
-		uint8_t *premaster32) FAST_FUNC;
-#endif
 
 /* Combined operations (for client-side use) */
 void curve_x25519_compute_pubkey_and_premaster(

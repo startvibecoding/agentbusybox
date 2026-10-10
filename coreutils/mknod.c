@@ -20,13 +20,11 @@
 /* BB_AUDIT SUSv3 N/A -- Matches GNU behavior. */
 
 //usage:#define mknod_trivial_usage
-//usage:       "[-m MODE] " IF_SELINUX("[-Z] ") "NAME TYPE [MAJOR MINOR]"
+//usage:       "[-m MODE] "  "NAME TYPE [MAJOR MINOR]"
 //usage:#define mknod_full_usage "\n\n"
 //usage:       "Create a special file (block, character, or pipe)\n"
 //usage:     "\n	-m MODE	Creation mode (default a=rw)"
-//usage:	IF_SELINUX(
-//usage:     "\n	-Z	Set security context"
-//usage:	)
+//usage:	
 //usage:     "\nTYPE:"
 //usage:     "\n	b	Block device"
 //usage:     "\n	c or u	Character device"

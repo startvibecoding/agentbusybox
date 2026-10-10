@@ -1527,37 +1527,6 @@ static void sp_ecc_make_key_256(sp_digit privkey[8], uint8_t *pubkey)
  * conversions are handled internally within these functions.
  */
 
-#if ENABLE_SSL_SERVER
-/* Generate P256 keypair: random private key + corresponding public key */
-void FAST_FUNC curve_P256_generate_keypair(uint8_t *privkey32, uint8_t *pubkey2x32)
-{
-	sp_digit privkey_sp[8];
-
-	/* Generate keypair using internal representation */
-	sp_ecc_make_key_256(privkey_sp, pubkey2x32);
-
-	/* Convert private key to binary format for storage */
-	sp_256_to_bin_8(privkey_sp, privkey32);
-
-	memset(privkey_sp, 0, sizeof(privkey_sp)); //paranoia
-}
-
-/* Compute shared secret (premaster) from our private key and peer's public key */
-void FAST_FUNC curve_P256_compute_premaster(
-		const uint8_t *privkey32, const uint8_t *peerkey2x32,
-		uint8_t *premaster32)
-{
-	sp_digit privkey_sp[8];
-
-	/* Convert binary private key to internal representation */
-	sp_256_from_bin_8(privkey_sp, privkey32);
-
-	/* Compute shared secret */
-	sp_ecc_secret_gen_256(privkey_sp, peerkey2x32, premaster32);
-
-	memset(privkey_sp, 0, sizeof(privkey_sp)); //paranoia
-}
-#endif
 
 /* Combined operation: generate keypair and compute premaster in one call */
 void FAST_FUNC curve_P256_compute_pubkey_and_premaster(

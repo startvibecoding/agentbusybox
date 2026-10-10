@@ -33,12 +33,10 @@
 /* BB_AUDIT SUSv3 compliant. */
 
 //usage:#define id_trivial_usage
-//usage:       "[-ugGnr"IF_SELINUX("Z")"] [USER]"
+//usage:       "[-ugGnr""] [USER]"
 //usage:#define id_full_usage "\n\n"
 //usage:       "Print information about USER or the current user\n"
-//usage:	IF_SELINUX(
-//usage:     "\n	-Z	Security context"
-//usage:	)
+//usage:	
 //usage:     "\n	-u	User ID"
 //usage:     "\n	-g	Group ID"
 //usage:     "\n	-G	Supplementary group IDs"
@@ -74,9 +72,6 @@ enum {
 	JUST_USER       = (1 << 2),
 	JUST_GROUP      = (1 << 3),
 	JUST_ALL_GROUPS = (1 << 4),
-#if ENABLE_SELINUX
-	JUST_CONTEXT    = (1 << 5),
-#endif
 };
 
 static int print_common(unsigned id, const char *name, const char *prefix)
@@ -157,9 +152,6 @@ int id_main(int argc UNUSED_PARAM, char **argv)
 	int status = EXIT_SUCCESS;
 	const char *prefix;
 	const char *username;
-#if ENABLE_SELINUX
-	security_context_t scontext = NULL;
-#endif
 
 	if (ENABLE_GROUPS && (!ENABLE_ID || applet_name[0] == 'g')) {
 		/* TODO: coreutils groups prepend "USER : " prefix,
@@ -173,10 +165,10 @@ int id_main(int argc UNUSED_PARAM, char **argv)
 		/* Don't allow -n -r -nr -ug -rug -nug -rnug -uZ -gZ -GZ*/
 		/* Don't allow more than one username */
 		opt = getopt32(argv, "^"
-			"rnugG" IF_SELINUX("Z")
+			"rnugG" 
 			"\0"
 			"?1:u--g:g--u:G--u:u--G:g--G:G--g:r?ugG:n?ugG"
-			IF_SELINUX(":u--Z:Z--u:g--Z:Z--g:G--Z:Z--G")
+			
 		);
 	}
 
@@ -254,12 +246,6 @@ int id_main(int argc UNUSED_PARAM, char **argv)
 		}
 		if (ENABLE_FEATURE_CLEAN_UP && !ENABLE_PLATFORM_MINGW32)
 			free(groups);
-#if ENABLE_SELINUX
-		if (is_selinux_enabled()) {
-			if (getcon(&scontext) == 0)
-				printf(" context=%s", scontext);
-		}
-#endif
 	} else if (opt & PRINT_REAL) {
 		euid = ruid;
 		egid = rgid;
@@ -269,19 +255,6 @@ int id_main(int argc UNUSED_PARAM, char **argv)
 		status |= print_user(euid, NULL);
 	else if (opt & JUST_GROUP)
 		status |= print_group(egid, NULL);
-#if ENABLE_SELINUX
-	else if (opt & JUST_CONTEXT) {
-		selinux_or_die();
-		if (username || getcon(&scontext)) {
-			bb_error_msg_and_die("can't get process context%s",
-				username ? " for a different user" : "");
-		}
-		fputs_stdout(scontext);
-	}
-	/* freecon(NULL) seems to be harmless */
-	if (ENABLE_FEATURE_CLEAN_UP)
-		freecon(scontext);
-#endif
 	bb_putchar('\n');
 	fflush_stdout_and_exit(status);
 }

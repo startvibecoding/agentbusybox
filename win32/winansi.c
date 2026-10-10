@@ -1552,6 +1552,60 @@ static int writeCon_utf8(int fd, const char *u8buf, size_t u8siz)
 }
 #endif
 
+#if ENABLE_FEATURE_UTF8_CONSOLE
+/*
+ * Normalize the console and the child environment to UTF8, so that output
+ * of programs such as Python/PowerShell/cmd stays consistent with BusyBox's
+ * internal UTF8 encoding (which the UTF8 manifest enables):
+ *
+ * - inject PYTHONIOENCODING=utf-8 and PYTHONUTF8=1 (unless already set) so
+ *   that Python uses UTF8 for piped/redirected stdio as well,
+ * - if a console is attached, switch its input/output codepages to 65001
+ *   (restored at exit).  Programs which inspect the console codepage
+ *   (PowerShell, cmd, ...) then exchange UTF8 with us and with each other.
+ *
+ * Set BB_SKIP_UTF8_CONSOLE in the environment to skip the codepage change.
+ */
+static UINT saved_console_cp[2];
+
+static void restore_console_cp(void)
+{
+	SetConsoleCP(saved_console_cp[0]);
+	SetConsoleOutputCP(saved_console_cp[1]);
+}
+
+void FAST_FUNC console_utf8_init(void)
+{
+	static int done = 0;
+	UINT cp_in, cp_out;
+
+	if (done)
+		return;
+	done = 1;
+
+	/* set only if not already set (replace=0) */
+	setenv("PYTHONIOENCODING", "utf-8", 0);
+	setenv("PYTHONUTF8", "1", 0);
+
+	if (getenv(BB_SKIP_UTF8_CONSOLE) || GetACP() != CP_UTF8)
+		return;
+
+	cp_in = GetConsoleCP();
+	cp_out = GetConsoleOutputCP();
+	if (!cp_out || cp_out == CP_UTF8)
+		return;  /* no console attached, or already UTF8 */
+
+	if (SetConsoleOutputCP(CP_UTF8)) {
+		saved_console_cp[0] = cp_in;
+		saved_console_cp[1] = cp_out;
+		atexit(restore_console_cp);
+		/* failing to switch the input CP (e.g. no input) is ok */
+		if (cp_in && cp_in != CP_UTF8)
+			SetConsoleCP(CP_UTF8);
+	}
+}
+#endif
+
 void FAST_FUNC console_write(const char *str, int len)
 {
 	char *buf = xmemdup(str, len);
@@ -1580,6 +1634,373 @@ static int conout_conv_enabled(void)
 	return enabled;
 }
 
+#if ENABLE_FEATURE_UTF8_AUTODETECT
+/*
+ * Automatic console output encoding detection.
+ *
+ * Data written to the console may mix UTF8 (BusyBox's internal encoding,
+ * output of UTF8-aware programs) with a legacy code page (cmd, dir and
+ * friends encode according to the console output CP; other programs use
+ * the system ACP - e.g. GBK/CP936 on Simplified Chinese systems).
+ * Instead of assuming one encoding for the whole stream, decode maximal
+ * runs of non-ASCII bytes independently:
+ *  - a run which strictly decodes as UTF8 is treated as UTF8;
+ *    this is the preferred interpretation because well-formed UTF8 CJK
+ *    text is almost always (mis)decodable as GBK too, while the converse
+ *    is rare;
+ *  - a run which is not valid UTF8 is decoded with MultiByteToWideChar()
+ *    using the legacy code page;
+ *  - bytes which neither decoder accepts print the substitution wchar.
+ * The result is written with WriteConsoleW, so there is no lossy
+ * CP->CP recoding and no dependence on the console CP matching either
+ * encoding.  Chinese and other multi-byte text displays correctly
+ * whichever encoder produced it.
+ *
+ * The legacy code page is the console output CP when it is not UTF8,
+ * else the process ACP; BB_CONS_ENCODING=<cp> overrides it (65001
+ * effectively disables legacy decoding).
+ *
+ * Bytes of an incomplete sequence at the end of a write are carried
+ * over to the next call, like writeCon_utf8() does.  Cross-call state
+ * is shared between stdout and stderr, with the same caveats.
+ */
+
+static unsigned char pending_bytes[4];
+static int npending;
+
+#if CONFIG_SUBST_WCHAR
+# define AUTODETECT_SUBST_W ((wchar_t)CONFIG_SUBST_WCHAR)
+#else
+# define AUTODETECT_SUBST_W L'?'
+#endif
+
+static UINT autodetect_legacy_cp(void)
+{
+	static UINT cp;
+	static int tested;  /* = 0 */
+
+	if (!tested) {
+		const char *e = getenv(BB_CONS_ENCODING);
+
+		tested = 1;
+		if (e && *e) {
+			char *end;
+			cp = (UINT)strtoul(e, &end, 10);
+			if (cp == 0 || *end)
+				cp = CP_UTF8;  /* invalid value: no legacy decoding */
+		} else {
+			cp = GetConsoleOutputCP();
+			if (!cp || cp == CP_UTF8)
+				cp = GetACP();
+			if (!cp)
+				cp = CP_ACP;
+		}
+	}
+
+	return cp;
+}
+
+/*
+ * Decode one strict UTF8 sequence at s (at most n bytes available).
+ * Return: number of bytes consumed (>0),
+ * -1 if a valid prefix was truncated by the end of the buffer,
+ * 0 if the bytes at s can never form a UTF8 sequence.
+ * Rejects overlong forms, surrogates (and hence the "WLOG" surrogate
+ * pairs ED A0.. ED B0.. ubiquitous in GBK-mangled replacement text)
+ * and codepoints beyond U+10FFFF.
+ */
+static int next_utf8_seq(const unsigned char *s, int n, uint32_t *cp_out)
+{
+	static const uint32_t cpmin[] = { 0, 0x80, 0x800, 0x10000 };
+	unsigned char c = s[0];
+	int len, i;
+	uint32_t cp;
+
+	if (c < 0x80) {           /* ASCII7 is valid UTF8 */
+		*cp_out = c;
+		return 1;
+	}
+	if (c >= 0xc2 && c <= 0xdf)
+		len = 2;
+	else if (c >= 0xe0 && c <= 0xef)
+		len = 3;
+	else if (c >= 0xf0 && c <= 0xf4)
+		len = 4;
+	else
+		return 0;           /* not a UTF8 lead byte */
+	cp = c & (0x7f >> len);
+	for (i = 1; i < len; i++) {
+		if (i >= n)
+			return -1;    /* plausible, but need more bytes */
+		if ((s[i] & 0xc0) != 0x80)
+			return 0;
+		cp = (cp << 6) | (s[i] & 0x3f);
+	}
+	/* reject overlong, out of range, and surrogates */
+	if (cp < cpmin[len - 1] || cp > 0x10ffff)
+		return 0;
+	if (cp >= 0xd800 && cp <= 0xdfff)
+		return 0;
+
+	*cp_out = cp;
+	return len;
+}
+
+/* Return the index where a valid-but-incomplete UTF8 sequence starts at the
+ * end of s[0..n), or -1 if there is none.  Do not require the bytes before
+ * it to be UTF8: a legacy-CP stretch can precede a partial UTF8 sequence in
+ * a mixed run. */
+static int trailing_incomplete_utf8(const unsigned char *s, int n)
+{
+	uint32_t cp;
+	int i = 0;
+	int tail = -1;
+
+	while (i < n) {
+		int r = next_utf8_seq(s + i, n - i, &cp);
+		if (r < 0)
+			tail = i;       /* valid prefix, truncated by the buffer end */
+		/* Advance one byte after an invalid or incomplete sequence so a
+		 * possible UTF8 prefix after legacy data is still considered. */
+		i += r > 0 ? r : 1;
+	}
+	return tail;
+}
+
+/* Length of the maximal strictly-valid UTF8 stretch starting at s[0..n).
+ * *strong is set if it contains a 3- or 4-byte sequence. */
+static int utf8_stretch_len(const unsigned char *s, int n, int *strong)
+{
+	uint32_t cp;
+	int i = 0;
+
+	*strong = 0;
+	while (i < n) {
+		int r = next_utf8_seq(s + i, n - i, &cp);
+		if (r <= 0)
+			break;
+		if (r >= 3)
+			*strong = 1;
+		i += r;
+	}
+	return i;
+}
+
+/* Length (1 or 2) of the legacy-CP unit at s[0..avail). */
+static int legacy_unit_len(UINT cp, const unsigned char *s, int avail)
+{
+	wchar_t wc;
+
+	if (avail >= 2
+	 && MultiByteToWideChar(cp, MB_ERR_INVALID_CHARS, (LPCCH)s, 2, &wc, 1) == 1)
+		return 2;
+	return 1;
+}
+
+/* Append one codepoint (as one or two wchars) to wbuf, return the new length. */
+static int put_wch(wchar_t *wbuf, int wlen, uint32_t cp)
+{
+	if (cp < 0x10000) {
+		wbuf[wlen++] = (wchar_t)cp;
+	} else {
+		cp -= 0x10000;
+		wbuf[wlen++] = (wchar_t)(0xd800 | (cp >> 10));
+		wbuf[wlen++] = (wchar_t)(0xdc00 | (cp & 0x3ff));
+	}
+	return wlen;
+}
+
+/* Append the strictly-valid UTF8 bytes s[0..n) as wchars. */
+static int emit_utf8_wide(const unsigned char *s, int n, wchar_t *wbuf, int wlen)
+{
+	uint32_t cp;
+	int i = 0;
+
+	while (i < n) {
+		i += next_utf8_seq(s + i, n - i, &cp);
+		wlen = put_wch(wbuf, wlen, cp);
+	}
+	return wlen;
+}
+
+/* Append s[0..len) decoded with the legacy code page, into wbuf.
+ * *consumed is set to len, or to len-1 when allow_carry is set and the last
+ * byte looks like the lead of a DBCS character split across calls (that byte
+ * is then left for the caller to carry over). */
+static int emit_legacy(UINT cp, const unsigned char *s, int len,
+		wchar_t *wbuf, int wlen, int *consumed, int allow_carry)
+{
+	int n;
+
+	*consumed = len;
+	/* strict first */
+	n = MultiByteToWideChar(cp, MB_ERR_INVALID_CHARS, (LPCCH)s, len, wbuf + wlen, len);
+	if (n > 0)
+		return wlen + n;
+	/* maybe only the last byte is an uncompleted DBCS lead */
+	if (allow_carry && len > 1 && s[len - 1] >= 0x81 && s[len - 1] <= 0xfe) {
+		n = MultiByteToWideChar(cp, MB_ERR_INVALID_CHARS,
+					(LPCCH)s, len - 1, wbuf + wlen, len);
+		if (n > 0) {
+			*consumed = len - 1;
+			return wlen + n;
+		}
+	}
+	/* lenient: invalid bytes become the code page's default char */
+	n = MultiByteToWideChar(cp, 0, (LPCCH)s, len, wbuf + wlen, len);
+	if (n > 0)
+		return wlen + n;
+	wbuf[wlen] = AUTODETECT_SUBST_W;
+	return wlen + 1;
+}
+
+/*
+ * Decode a non-ASCII run s[pos..runend) (all bytes >= 0x80) into wbuf,
+ * auto-detecting UTF8 and legacy-CP data, and return the new wbuf length
+ * via *wlen_out.
+ *
+ * A run that is strictly valid UTF8 as a whole is decoded as UTF8 (this
+ * preserves pure UTF8, including Western 2-byte text).  Otherwise the run is
+ * segmented: a maximal strictly-valid UTF8 stretch is committed as UTF8 only
+ * when it contains a 3- or 4-byte sequence (a strong sign of genuine UTF8,
+ * since a legacy 2-byte code page rarely produces such a run); everything
+ * else is decoded with the legacy code page.  This lets UTF8 and legacy data
+ * alternate within one run and avoids misreading legacy 2-byte characters
+ * whose bytes happen to be valid UTF8.
+ *
+ * If at_eof is set, a trailing incomplete UTF8 sequence (or, when no such
+ * sequence was carried, a split DBCS lead) is left unconsumed; the number of
+ * such trailing bytes is returned so the caller can carry them over.
+ */
+static int decode_run(const unsigned char *s, int pos, int runend, UINT legacy,
+		wchar_t *wbuf, int wlen, int at_eof, int *wlen_out)
+{
+	uint32_t cp;
+	int i, leg, tail = -1, leftover = 0;
+
+	if (at_eof) {
+		tail = trailing_incomplete_utf8(s + pos, runend - pos);
+		if (tail >= 0) {
+			leftover = (runend - pos) - tail;
+			runend = pos + tail;
+		}
+	}
+
+	/* fast path: the whole run is strictly valid UTF8 */
+	for (i = pos; i < runend; ) {
+		int r = next_utf8_seq(s + i, runend - i, &cp);
+		if (r <= 0)
+			break;
+		i += r;
+	}
+	if (i == runend) {
+		wlen = emit_utf8_wide(s + pos, runend - pos, wbuf, wlen);
+		*wlen_out = wlen;
+		return leftover;
+	}
+
+	/* mixed: alternate UTF8 and legacy-CP decoding */
+	i = pos;
+	leg = pos;
+	while (i < runend) {
+		int strong;
+		int j = utf8_stretch_len(s + i, runend - i, &strong);
+
+		if (j > 0 && strong) {
+			int consumed;
+			if (i > leg)
+				wlen = emit_legacy(legacy, s + leg, i - leg,
+						wbuf, wlen, &consumed, 0);
+			wlen = emit_utf8_wide(s + i, j, wbuf, wlen);
+			i += j;
+			leg = i;
+		} else {
+			i += legacy_unit_len(legacy, s + i, runend - i);
+		}
+	}
+	if (leg < runend) {
+		int consumed;
+		int allow = at_eof && leftover == 0;
+		wlen = emit_legacy(legacy, s + leg, runend - leg,
+				wbuf, wlen, &consumed, allow);
+		if (allow && consumed < runend - leg)
+			leftover = runend - leg - consumed;
+	}
+
+	*wlen_out = wlen;
+	return leftover;
+}
+
+// Write buf to the console (fd), auto-detecting UTF8 and legacy-CP data.
+// Return: 0 on success, -1 on error (e.g. if fd is not a console).
+static int writeCon_autodetect(int fd, const char *msg, size_t siz)
+{
+	/* grow-on-demand, reused between calls to avoid malloc churn */
+	static wchar_t *wbuf;
+	static int wbufsiz;  /* = 0 */
+
+	HANDLE h = (HANDLE)_get_osfhandle(fd);
+	const unsigned char *s;
+	unsigned char *work = NULL;
+	DWORD nwritten = 0;  /* unused: XP requires non-NULL arg */
+	int n = (int)siz;
+	int pos, wlen = 0;
+	int room;
+	UINT legacy = autodetect_legacy_cp();
+
+	/* prepend bytes carried over from the prior call[s] */
+	if (npending) {
+		work = xmalloc(npending + n);
+		memcpy(work, pending_bytes, npending);
+		memcpy(work + npending, msg, n);
+		n += npending;
+		npending = 0;
+		s = work;
+	} else {
+		s = (const unsigned char *)msg;
+	}
+
+	/* at most one wchar per byte, plus surrogate-pair and
+	 * trailing-carveout slack */
+	room = n + 4;
+	if (wbufsiz < room) {
+		free(wbuf);
+		wbuf = xmalloc(room * sizeof(wchar_t));
+		wbufsiz = room;
+	}
+
+	pos = 0;
+	while (pos < n) {
+		int runend, leftover;
+
+		if (s[pos] < 0x80) {
+			wbuf[wlen++] = s[pos++];
+			continue;
+		}
+
+		runend = pos;
+		while (runend < n && s[runend] >= 0x80)
+			runend++;
+
+		leftover = decode_run(s, pos, runend, legacy,
+				wbuf, wlen, runend == n, &wlen);
+		pos = runend;
+		if (leftover) {
+			memcpy(pending_bytes, s + runend - leftover, leftover);
+			npending = leftover;
+			break;
+		}
+	}
+
+	if (wlen && !WriteConsoleW(h, wbuf, wlen, &nwritten, 0)) {
+		free(work);
+		return -1;
+	}
+	free(work);
+	return 0;
+}
+#endif  /* ENABLE_FEATURE_UTF8_AUTODETECT */
+
 // TODO: improvements:
 //
 // 1. currently conv_[f]writeCon modify buf inplace, which means the caller
@@ -1601,7 +2022,10 @@ static int conout_conv_enabled(void)
 static int conv_fwriteCon(FILE *stream, char *buf, size_t siz)
 {
 	if (conout_conv_enabled()) {
-#if ENABLE_FEATURE_UTF8_OUTPUT
+#if ENABLE_FEATURE_UTF8_AUTODETECT
+		fflush(stream);  /* writeCon_autodetect is unbuffered */
+		return writeCon_autodetect(fileno(stream), buf, siz) ? EOF : 0;
+#elif ENABLE_FEATURE_UTF8_OUTPUT
 		int acp = GetACP();
 		if (acp == CP_UTF8 && GetConsoleOutputCP() != CP_UTF8) {
 			fflush(stream);  // writeCon_utf8 is unbuffered
@@ -1621,7 +2045,9 @@ static int conv_fwriteCon(FILE *stream, char *buf, size_t siz)
 static int conv_writeCon(int fd, char *buf, size_t siz)
 {
 	if (conout_conv_enabled()) {
-#if ENABLE_FEATURE_UTF8_OUTPUT
+#if ENABLE_FEATURE_UTF8_AUTODETECT
+		return writeCon_autodetect(fd, buf, siz) ? -1 : siz;
+#elif ENABLE_FEATURE_UTF8_OUTPUT
 		int acp = GetACP();
 		if (acp == CP_UTF8 && GetConsoleOutputCP() != CP_UTF8)
 			return writeCon_utf8(fd, buf, siz) ? -1 : siz;

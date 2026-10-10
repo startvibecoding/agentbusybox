@@ -133,13 +133,6 @@ config TIME64
 	(i.e. all 64bit archs and some selected 32bit archs (currently riscv
 	and x32)).
 
-config PAM
-	bool "Support PAM (Pluggable Authentication Modules)"
-	default n
-	help
-	Use PAM in some applets (currently login and httpd) instead
-	of direct access to password database.
-
 config FEATURE_DEVPTS
 	bool "Use the devpts filesystem for Unix98 PTYs"
 	default y
@@ -341,24 +334,6 @@ config BUSYBOX_EXEC_PATH
 	executable. If you haven't got /proc, set this to wherever you
 	want to run busybox from.
 
-config SELINUX
-	bool "Support NSA Security Enhanced Linux"
-	default n
-	help
-	Enable support for SELinux in applets ls, ps, and id. Also provide
-	the option of compiling in SELinux applets.
-
-	If you do not have a complete SELinux userland installed, this stuff
-	will not compile.  Specifially, libselinux 1.28 or better is
-	directly required by busybox. If the installation is located in a
-	non-standard directory, provide it by invoking make as follows:
-
-		CFLAGS=-I<libselinux-include-path> \
-		LDFLAGS=-L<libselinux-lib-path> \
-		make
-
-	Most people will leave this set to 'N'.
-
 config FEATURE_CLEAN_UP
 	bool "Clean up all memory before exiting (usually not needed)"
 	default n
@@ -522,6 +497,50 @@ config FEATURE_UTF8_OUTPUT
 	This may be useful in conjunction with the UTF8 manifest which
 	is supported in Window 10 and 11.
 
+config FEATURE_UTF8_AUTODETECT
+	bool "Autodetect console output encoding (UTF8/legacy mix) (1.5 kb)"
+	default n
+	depends on PLATFORM_MINGW32
+	help
+	Console output may mix UTF8 encoded data (BusyBox's internal
+	encoding, and UTF8-aware child processes) with data encoded in a
+	legacy code page (e.g. the GBK/CP936 output of cmd, dir and other
+	programs that use the console codepage or the system ACP).
+	When enabled, output is auto-detected run by run, where a run is a
+	maximal sequence of non-ASCII bytes.  A run that is strictly valid
+	UTF8 as a whole is decoded as UTF8; otherwise UTF8 and the legacy
+	code page are interleaved within the run: a stretch of valid UTF8
+	that contains a 3- or 4-byte sequence is decoded as UTF8, and
+	everything else is decoded with the legacy code page (UTF8
+	validation is strict: overlong forms, surrogates and out-of-range
+	codepoints are rejected).  This lets UTF8 and legacy data alternate
+	within one run and avoids misreading legacy two-byte characters
+	whose bytes happen to be valid UTF8.  An isolated run whose legacy
+	bytes are all valid UTF8 is inherently ambiguous and is read as
+	UTF8.  The result is written with WriteConsoleW so Chinese and
+	other multi-byte text displays correctly whichever encoder produced
+	it, with no lossy ACP->OEM recoding.
+	This takes precedence over FEATURE_UTF8_OUTPUT.
+	The legacy code page is the console output CP when it is not UTF8,
+	else the process ACP.  Set BB_CONS_ENCODING=<cp> in the environment
+	(e.g. 936 for GBK, 65001 to disable legacy decoding) to override.
+
+config FEATURE_UTF8_CONSOLE
+	bool "Switch console codepage to UTF8 at startup"
+	default n
+	depends on PLATFORM_MINGW32 && FEATURE_UTF8_MANIFEST
+	help
+	  At startup, set the console input and output codepages to UTF8
+	  (65001), and restore the previous values on exit.  Child programs
+	  which use the console codepage to encode their output (cmd,
+	  PowerShell, ...) will then produce UTF8 which matches BusyBox's
+	  internal encoding, avoiding mojibake with non-ASCII text.
+	  PYTHONIOENCODING and PYTHONUTF8 are also set in the environment
+	  (if not already set) so that Python child processes use UTF8 for
+	  piped and redirected I/O too.
+	  Set BB_SKIP_UTF8_CONSOLE in the environment to skip the console
+	  codepage change.
+
 config TERMINAL_MODE
 	int "Default setting for terminal mode"
 	default 5
@@ -625,82 +644,6 @@ config NOMMU
 	you may force NOMMU build here.
 
 	Most people will leave this set to 'N'.
-
-# PIE can be made to work with BUILD_LIBBUSYBOX, but currently
-# build system does not support that
-config BUILD_LIBBUSYBOX
-	bool "Build shared libbusybox"
-	default n
-	depends on !FEATURE_PREFER_APPLETS && !PIE && !STATIC
-	help
-	Build a shared library libbusybox.so.N.N.N which contains all
-	busybox code.
-
-	This feature allows every applet to be built as a really tiny
-	separate executable linked against the library:
-	|$ size 0_lib/l*
-	|    text  data   bss     dec    hex filename
-	|     939   212    28    1179    49b 0_lib/last
-	|     939   212    28    1179    49b 0_lib/less
-	|  919138  8328  1556  929022  e2cfe 0_lib/libbusybox.so.1.N.M
-
-	This is useful on NOMMU systems which are not capable
-	of sharing executables, but are capable of sharing code
-	in dynamic libraries.
-
-config FEATURE_LIBBUSYBOX_STATIC
-	bool "Pull in all external references into libbusybox"
-	default n
-	depends on BUILD_LIBBUSYBOX
-	help
-	Make libbusybox library independent, not using or requiring
-	any other shared libraries.
-
-config FEATURE_INDIVIDUAL
-	bool "Produce a binary for each applet, linked against libbusybox"
-	default y
-	depends on BUILD_LIBBUSYBOX
-	help
-	If your CPU architecture doesn't allow for sharing text/rodata
-	sections of running binaries, but allows for runtime dynamic
-	libraries, this option will allow you to reduce memory footprint
-	when you have many different applets running at once.
-
-	If your CPU architecture allows for sharing text/rodata,
-	having single binary is more optimal.
-
-	Each applet will be a tiny program, dynamically linked
-	against libbusybox.so.N.N.N.
-
-	You need to have a working dynamic linker.
-
-config FEATURE_SHARED_BUSYBOX
-	bool "Produce additional busybox binary linked against libbusybox"
-	default y
-	depends on BUILD_LIBBUSYBOX
-	help
-	Build busybox, dynamically linked against libbusybox.so.N.N.N.
-
-	You need to have a working dynamic linker.
-
-### config BUILD_AT_ONCE
-###	bool "Compile all sources at once"
-###	default n
-###	help
-###	Normally each source-file is compiled with one invocation of
-###	the compiler.
-###	If you set this option, all sources are compiled at once.
-###	This gives the compiler more opportunities to optimize which can
-###	result in smaller and/or faster binaries.
-###
-###	Setting this option will consume alot of memory, e.g. if you
-###	enable all applets with all features, gcc uses more than 300MB
-###	RAM during compilation of busybox.
-###
-###	This option is most likely only beneficial for newer compilers
-###	such as gcc-4.1 and above.
-###
-###	Say 'N' unless you know what you are doing.
 
 config CROSS_COMPILER_PREFIX
 	string "Cross compiler prefix"
@@ -917,48 +860,6 @@ config WARN_SIMPLE_MSG
 	Note that use of STRERROR_FMT may give false positives.
 
 	If you aren't developing busybox, say N here.
-
-choice
-	prompt "Additional debugging library"
-	default NO_DEBUG_LIB
-	help
-	Using an additional debugging library will make busybox become
-	considerably larger and will cause it to run more slowly. You
-	should always leave this option disabled for production use.
-
-	dmalloc support:
-	----------------
-	This enables compiling with dmalloc ( http://dmalloc.com/ )
-	which is an excellent public domain mem leak and malloc problem
-	detector. To enable dmalloc, before running busybox you will
-	want to properly set your environment, for example:
-		export DMALLOC_OPTIONS=debug=0x34f47d83,inter=100,log=logfile
-	The 'debug=' value is generated using the following command
-	dmalloc -p log-stats -p log-non-free -p log-bad-space \
-		-p log-elapsed-time -p check-fence -p check-heap \
-		-p check-lists -p check-blank -p check-funcs -p realloc-copy \
-		-p allow-free-null
-
-	Electric-fence support:
-	-----------------------
-	This enables compiling with Electric-fence support. Electric
-	fence is another very useful malloc debugging library which uses
-	your computer's virtual memory hardware to detect illegal memory
-	accesses. This support will make busybox be considerably larger
-	and run slower, so you should leave this option disabled unless
-	you are hunting a hard to find memory problem.
-
-
-config NO_DEBUG_LIB
-	bool "None"
-
-config DMALLOC
-	bool "Dmalloc"
-
-config EFENCE
-	bool "Electric-fence"
-
-endchoice
 
 source libbb/Config.in
 

@@ -32,9 +32,7 @@
 //usage:       "Create DIRECTORY\n"
 //usage:     "\n	-m MODE	Mode"
 //usage:     "\n	-p	No error if exists; make parent directories as needed"
-//usage:	IF_SELINUX(
-//usage:     "\n	-Z	Set security context"
-//usage:	)
+//usage:	
 //usage:
 //usage:#define mkdir_example_usage
 //usage:       "$ mkdir /tmp/foo\n"
@@ -56,20 +54,14 @@ int mkdir_main(int argc UNUSED_PARAM, char **argv)
 	int flags = 0;
 	unsigned opt;
 	char *smode;
-#if ENABLE_SELINUX
-	security_context_t scontext;
-#endif
 
-	opt = getopt32long(argv, "m:pv" IF_SELINUX("Z:"),
+	opt = getopt32long(argv, "m:pv" ,
 			"mode\0"    Required_argument "m"
 			"parents\0" No_argument       "p"
-# if ENABLE_SELINUX
-			"context\0" Required_argument "Z"
-# endif
 # if ENABLE_FEATURE_VERBOSE
 			"verbose\0" No_argument       "v"
 # endif
-			, &smode IF_SELINUX(,&scontext)
+			, &smode 
 	);
 	if (opt & 1) {
 		mode_t mmode = bb_parse_mode(smode, 0777);
@@ -82,12 +74,6 @@ int mkdir_main(int argc UNUSED_PARAM, char **argv)
 		flags |= FILEUTILS_RECUR;
 	if ((opt & 4) && FILEUTILS_VERBOSE)
 		flags |= FILEUTILS_VERBOSE;
-#if ENABLE_SELINUX
-	if (opt & 8) {
-		selinux_or_die();
-		setfscreatecon_or_die(scontext);
-	}
-#endif
 
 	argv += optind;
 	if (!argv[0])

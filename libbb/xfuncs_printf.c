@@ -552,20 +552,7 @@ void FAST_FUNC xfstat(int fd, struct stat *stat_buf, const char *errmsg)
 		bb_simple_perror_msg_and_die(errmsg);
 }
 
-#if ENABLE_SELINUX
-// selinux_or_die() - die if SELinux is disabled.
-void FAST_FUNC selinux_or_die(void)
-{
-	int rc = is_selinux_enabled();
-	if (rc == 0) {
-		bb_simple_error_msg_and_die("SELinux is disabled");
-	} else if (rc < 0) {
-		bb_simple_error_msg_and_die("is_selinux_enabled() failed");
-	}
-}
-#else
 /* not defined, other code must have no calls to it */
-#endif
 
 #if !ENABLE_PLATFORM_MINGW32
 int ioctl_or_perror_and_die(int fd, unsigned request, void *argp, const char *fmt,...)

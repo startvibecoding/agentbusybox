@@ -45,12 +45,13 @@ static inline int *get_perrno(void) { return &errno; }
 
 /* Include generated applet names, pointers to <applet>_main, etc */
 #include "applet_tables.h"
-/* ...and if applet_tables generator says we have only one applet... */
+/* ...and if applet_tables generator says we have only one applet,
+ * "individual applet" mode rules apply (applet name == argv[0]):
+ */
 #ifdef SINGLE_APPLET_MAIN
-# undef ENABLE_FEATURE_INDIVIDUAL
-# define ENABLE_FEATURE_INDIVIDUAL 1
-# undef IF_FEATURE_INDIVIDUAL
 # define IF_FEATURE_INDIVIDUAL(...) __VA_ARGS__
+#else
+# define IF_FEATURE_INDIVIDUAL(...)
 #endif
 
 #if (ENABLE_FEATURE_INSTALLER && !ENABLE_PLATFORM_MINGW32) || \
@@ -359,7 +360,7 @@ void lbb_prepare(const char *applet
 	if (ENABLE_LOCALE_SUPPORT)
 		setlocale(LC_ALL, "");
 
-#if ENABLE_FEATURE_INDIVIDUAL
+#ifdef SINGLE_APPLET_MAIN
 	/* Redundant for busybox (run_applet_and_exit covers that case)
 	 * but needed for "individual applet" mode */
 	if (argv[1]
@@ -1296,11 +1297,7 @@ get_script_content(unsigned n UNUSED_PARAM)
 #endif /* defined(SINGLE_APPLET_MAIN) */
 
 
-#if ENABLE_BUILD_LIBBUSYBOX
-int lbb_main(char **argv)
-#else
 int main(int argc UNUSED_PARAM, char **argv)
-#endif
 {
 #if 0
 	/* TODO: find a use for a block of memory between end of .bss
@@ -1370,6 +1367,10 @@ int main(int argc UNUSED_PARAM, char **argv)
 	/* Have this process handle critical errors itself:  the default
 	 * system-generated error dialogs may be inconvenient. */
 	change_critical_error_dialogs(getenv(BB_CRITICAL_ERROR_DIALOGS));
+
+# if ENABLE_FEATURE_UTF8_CONSOLE
+	console_utf8_init();
+# endif
 #endif
 
 #if defined(__MINGW64_VERSION_MAJOR)
@@ -1393,11 +1394,7 @@ int main(int argc UNUSED_PARAM, char **argv)
 	}
 	/* applet_names in this case is just "applet\0\0" */
 	lbb_prepare(applet_names IF_FEATURE_INDIVIDUAL(, argv));
-# if ENABLE_BUILD_LIBBUSYBOX
-	return SINGLE_APPLET_MAIN(string_array_len(argv), argv);
-# else
 	return SINGLE_APPLET_MAIN(argc, argv);
-# endif
 
 #elif !ENABLE_BUSYBOX && NUM_APPLETS == 0
 

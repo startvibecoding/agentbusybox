@@ -37,12 +37,33 @@ mkdir -p build-win64 && make O=build-win64 mingw64_defconfig && make O=build-win
 产物:Linux 为 `build-linux/busybox`(~590KB、194 applet),Windows 为 `build-win64/busybox.exe`
 (~712KB、179 applet)。Windows 产物可用 `WINEDEBUG=-all wine build-win64/busybox.exe --list` 冒烟测试。
 
-可用 defconfig(`configs/` 目录,均已清理死符号):`mingw32_defconfig`(32 位)、
+可用 defconfig(`configs/` 目录,已精简为 Windows 相关配置):`mingw32_defconfig`(32 位)、
 `mingw32w_defconfig`(32 位 UTF-8)、`mingw64_defconfig`(64 位)、`mingw64u_defconfig`(64 位 UTF-8)、
 `mingw64a_defconfig`,以及通用 `make defconfig`(Linux/POSIX)。
 `scripts/mk_mingw64u_defconfig` 由 mingw64 配置派生 UTF-8 配置。
 
 本机环境:gcc 14、`x86_64-w64-mingw32-gcc` / `i686-w64-mingw32-gcc` 均已安装,wine 可用于测试。
+
+## 构建系统(已瘦身)
+
+顶层只保留六个核心动作:配置(`*config`/`menuconfig`)、构建(`make [O=dir]`)、
+清理(`clean`/`mrproper`/`distclean`)、测试(`check`/`test`)、安装(`install`)、帮助(`help`)。
+构建引擎仍是 Linux 内核 kbuild 的递归 make(内核遗留的外部模块、modules、kallsyms、
+打包、编辑器索引等死代码已删除),关键文件:
+
+- `Makefile` — 顶层调度(O= 二次 make 重定向、*config 分流、递归下降、链接与 strip)
+- `Makefile.flags` — 按 .config 拼装 CFLAGS/LDFLAGS/LDLIBS(含 MINGW32 分支)
+- `Makefile.custom` — install/check/doc/尺寸分析类目标
+- `Makefile.help` — help 文本
+- `scripts/Kbuild.include`、`scripts/Makefile.build`、`scripts/Makefile.lib`、
+  `scripts/Makefile.host`、`scripts/Makefile.clean` — kbuild 引擎(未改动,勿随意重构)
+- `scripts/gen_build_files.sh` — applet 元数据机制的实现(见"配置项定义")
+
+重要约定:`scripts/Makefile.build` 用 `$(if $(KBUILD_BUILTIN),...)` 决定每个目录产出什么,
+顶层 Makefile 必须 `export KBUILD_BUILTIN=1`(以及 `KBUILD_CHECKSRC:=0`,否则每个 .o
+会被当成 sparse 检查目标而编译失败)。`all:` 不再依赖 `doc`,文档需显式 `make doc`。
+`make test` 会把 `testsuite/` 和 `scripts/echo.c` 复制到构建目录(dash 等不自带可用的
+`echo -ne`,测试脚本按 `../scripts/echo.c` 相对路径编译辅助 echo)。
 
 ## 目录结构
 
@@ -52,7 +73,14 @@ mkdir -p build-win64 && make O=build-win64 mingw64_defconfig && make O=build-win
 - `win32/` — **Windows 平台层**,整个 fork 的核心。包含:
   - `mingw.c`(~2700 行):POSIX 仿真主文件(stat/open/readdir/fork 语义等)
   - `process.c`:进程与子进程管理(用 Windows 线程仿真 fork/waitpid)
-  - `winansi.c`:ANSI 转义序列与 Windows 控制台 API 之间的仿真
+  - `winansi.c`:ANSI 转义序列与 Windows 控制台 API 之间的仿真;
+    其中控制台输出经 `conv_fwriteCon`/`conv_writeCon` 做编码处理:
+    `FEATURE_UTF8_OUTPUT` 假定输出全部是 UTF-8;`FEATURE_UTF8_AUTODETECT`
+    (本 fork 新增)则以"非 ASCII 字节段"为单位自动探测:整段严格合法 UTF-8
+    则按 UTF-8 解码;否则在段内交替——把"含 3/4 字节序列的合法 UTF-8 连续段"
+    判为 UTF-8,其余按传统代码页解码(默认取控制台输出 CP,非 UTF-8 时;
+    否则用进程 ACP;可用 `BB_CONS_ENCODING=<cp>` 覆盖,如 936),
+    统一经 `WriteConsoleW` 写出,解决 UTF-8/GBK 等混合输出的中文乱码
   - `poll.c` / `select.c`:套接字 I/O 复用仿真;`popen.c`、`termios.c`、`mntent.c`、`glob.c`、
     `fnmatch.c`、`fnmatch2.c`、`regex*.c`(从 glibc 移植的正则)、`strptime.c` 等:libc 缺失函数补齐
   - `*.h` 影子头文件(dirent.h、glob.h、regex.h、poll.h、termios.h、mntent.h 等)
@@ -120,7 +148,7 @@ int mu_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
 4. **平台头文件遮蔽**:改 `win32/*.h` 影子头文件会影响所有 `-Iwin32` 编译单元,改动前先确认
    对应的 Windows 原生头文件行为
 5. **删除 applet 的连锁反应**:除了 .c 文件,还要检查——静态 `Kbuild.src` 里引用其配置符号的
-   行、`Makefile` 的 `libs-y` 目录表、`scripts/Makefile.IMA` 的 include 块、`Config.src` 里的
+   行、`Makefile` 的 `libs-y` 目录表、`Config.src` 里的
    `source` 子目录行、`include/libbb.h` 等公共头里的 `ENABLE_XXX` 引用、共享库的 kbuild 挂载、
    testsuite/ 与 NOFORK_NOEXEC.lst、configs/*_defconfig(用 `make O=/tmp/x <name>_defconfig`
    重新生成即可归一化掉死符号)
@@ -151,15 +179,17 @@ int mu_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
 登录/用户管理(passwd/login/adduser 等)、Linux 杂项(devmem/hdparm/i2c/MTD/UBI 等)。
 移除后公共头文件(libbb.h)、共享库 kbuild 挂载、Makefile 目录表均已同步清理。
 
-构建系统也已精简(顶层 `Makefile` 1417→897 行):删掉从未可用的 Linux 内核构建遗留——
+构建系统也已精简(顶层 `Makefile` 1417→693 行,详见上节):删掉从未可用的 Linux 内核构建遗留——
 kallsyms/System.map 三段链接、可加载模块与外部模块(`make modules`、`M=`、MODVERDIR、
 depmod/modpost)、sparse 静态检查(`make C=1`)、`%pkg`/rpm 打包、DocBook `%docs`、
 includecheck/versioncheck/namespacecheck(对应 perl 脚本已不存在)、include2 asm 符号链接、
 `INSTALL_PATH=/boot`、KBUILD_IMAGE、UTS_MACHINE、version.h filechk、FLTFLAGS(bFLT)、
-`.lst` 目标(scripts/makelst 已不存在);`scripts/Makefile.build` 同步清理(checksrc、
-MODVERSIONS、single/multi-used-m 规则)。保留全部真实功能:`O=` 外置构建、arch/*/Makefile
-的 CFLAGS 调整、config/构建混合目标、tags/cscope/checkstack、install、clean/mrproper。
-HOSTCXX 因 scripts/kconfig 的 xconfig 引用而保留。验证:Linux 产物与精简前逐字节一致
-(仅时间戳不同),Windows mingw 交叉构建产物 179 applet 不变。
+`.kernelrelease` 机制、`config` 与构建目标的混合调用、编辑器索引(tags/cscope)及其脚本、
+`checkstack`/`kernelrelease`/`kernelversion` 目标、`.lst` 目标(scripts/makelst 已不存在)、
+HOSTCXX(`scripts/kconfig` 的 GUI 配置器已移除,不再需要 C++ 宿主程序);`scripts/Makefile.build`
+同步清理(checksrc、MODVERSIONS、single/multi-used-m 规则)。保留全部真实功能:`O=` 外置构建、
+arch/*/Makefile 的 CFLAGS 调整、`*config` 配置、install、clean/mrproper/distclean、
+check/test、help,以及 `Makefile.custom` 中的尺寸分析目标(sizes/bloatcheck/stksizes 等)。
+验证:Linux 产物与精简前逐字节一致(仅时间戳不同),Windows mingw 交叉构建产物 179 applet 不变。
 
 如需恢复某个 applet,`git log` 或上游 busybox 可找回对应 .c 文件,补上即可。
