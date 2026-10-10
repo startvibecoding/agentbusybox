@@ -1746,44 +1746,189 @@ static int next_utf8_seq(const unsigned char *s, int n, uint32_t *cp_out)
 	return len;
 }
 
-/*
- * Decode a run of bytes (s[0..len), all >= 0x80) using the legacy code
- * page.  Return the number of bytes consumed, *nw gets the number of
- * written wchars (wbuf has room for at least len).  If the strict decode
- * fails only because the last byte looks like the lead of a truncated
- * DBCS character, that byte is left unconsumed so the caller can carry
- * it over to the next call.
- */
-static int decode_legacy_run(UINT cp, const unsigned char *s, int len,
-		wchar_t *wbuf, int *nw)
+/* Return the index where a valid-but-incomplete UTF8 sequence starts at the
+ * end of s[0..n), or -1 if there is none.  Do not require the bytes before
+ * it to be UTF8: a legacy-CP stretch can precede a partial UTF8 sequence in
+ * a mixed run. */
+static int trailing_incomplete_utf8(const unsigned char *s, int n)
+{
+	uint32_t cp;
+	int i = 0;
+	int tail = -1;
+
+	while (i < n) {
+		int r = next_utf8_seq(s + i, n - i, &cp);
+		if (r < 0)
+			tail = i;       /* valid prefix, truncated by the buffer end */
+		/* Advance one byte after an invalid or incomplete sequence so a
+		 * possible UTF8 prefix after legacy data is still considered. */
+		i += r > 0 ? r : 1;
+	}
+	return tail;
+}
+
+/* Length of the maximal strictly-valid UTF8 stretch starting at s[0..n).
+ * *strong is set if it contains a 3- or 4-byte sequence. */
+static int utf8_stretch_len(const unsigned char *s, int n, int *strong)
+{
+	uint32_t cp;
+	int i = 0;
+
+	*strong = 0;
+	while (i < n) {
+		int r = next_utf8_seq(s + i, n - i, &cp);
+		if (r <= 0)
+			break;
+		if (r >= 3)
+			*strong = 1;
+		i += r;
+	}
+	return i;
+}
+
+/* Length (1 or 2) of the legacy-CP unit at s[0..avail). */
+static int legacy_unit_len(UINT cp, const unsigned char *s, int avail)
+{
+	wchar_t wc;
+
+	if (avail >= 2
+	 && MultiByteToWideChar(cp, MB_ERR_INVALID_CHARS, (LPCCH)s, 2, &wc, 1) == 1)
+		return 2;
+	return 1;
+}
+
+/* Append one codepoint (as one or two wchars) to wbuf, return the new length. */
+static int put_wch(wchar_t *wbuf, int wlen, uint32_t cp)
+{
+	if (cp < 0x10000) {
+		wbuf[wlen++] = (wchar_t)cp;
+	} else {
+		cp -= 0x10000;
+		wbuf[wlen++] = (wchar_t)(0xd800 | (cp >> 10));
+		wbuf[wlen++] = (wchar_t)(0xdc00 | (cp & 0x3ff));
+	}
+	return wlen;
+}
+
+/* Append the strictly-valid UTF8 bytes s[0..n) as wchars. */
+static int emit_utf8_wide(const unsigned char *s, int n, wchar_t *wbuf, int wlen)
+{
+	uint32_t cp;
+	int i = 0;
+
+	while (i < n) {
+		i += next_utf8_seq(s + i, n - i, &cp);
+		wlen = put_wch(wbuf, wlen, cp);
+	}
+	return wlen;
+}
+
+/* Append s[0..len) decoded with the legacy code page, into wbuf.
+ * *consumed is set to len, or to len-1 when allow_carry is set and the last
+ * byte looks like the lead of a DBCS character split across calls (that byte
+ * is then left for the caller to carry over). */
+static int emit_legacy(UINT cp, const unsigned char *s, int len,
+		wchar_t *wbuf, int wlen, int *consumed, int allow_carry)
 {
 	int n;
 
-	*nw = 0;
+	*consumed = len;
 	/* strict first */
-	n = MultiByteToWideChar(cp, MB_ERR_INVALID_CHARS, (LPCCH)s, len, wbuf, len);
-	if (n > 0) {
-		*nw = n;
-		return len;
-	}
+	n = MultiByteToWideChar(cp, MB_ERR_INVALID_CHARS, (LPCCH)s, len, wbuf + wlen, len);
+	if (n > 0)
+		return wlen + n;
 	/* maybe only the last byte is an uncompleted DBCS lead */
-	if (len > 1 && s[len - 1] >= 0x81 && s[len - 1] <= 0xfe) {
+	if (allow_carry && len > 1 && s[len - 1] >= 0x81 && s[len - 1] <= 0xfe) {
 		n = MultiByteToWideChar(cp, MB_ERR_INVALID_CHARS,
-					(LPCCH)s, len - 1, wbuf, len);
+					(LPCCH)s, len - 1, wbuf + wlen, len);
 		if (n > 0) {
-			*nw = n;
-			return len - 1;
+			*consumed = len - 1;
+			return wlen + n;
 		}
 	}
 	/* lenient: invalid bytes become the code page's default char */
-	n = MultiByteToWideChar(cp, 0, (LPCCH)s, len, wbuf, len);
-	if (n > 0) {
-		*nw = n;
-		return len;
+	n = MultiByteToWideChar(cp, 0, (LPCCH)s, len, wbuf + wlen, len);
+	if (n > 0)
+		return wlen + n;
+	wbuf[wlen] = AUTODETECT_SUBST_W;
+	return wlen + 1;
+}
+
+/*
+ * Decode a non-ASCII run s[pos..runend) (all bytes >= 0x80) into wbuf,
+ * auto-detecting UTF8 and legacy-CP data, and return the new wbuf length
+ * via *wlen_out.
+ *
+ * A run that is strictly valid UTF8 as a whole is decoded as UTF8 (this
+ * preserves pure UTF8, including Western 2-byte text).  Otherwise the run is
+ * segmented: a maximal strictly-valid UTF8 stretch is committed as UTF8 only
+ * when it contains a 3- or 4-byte sequence (a strong sign of genuine UTF8,
+ * since a legacy 2-byte code page rarely produces such a run); everything
+ * else is decoded with the legacy code page.  This lets UTF8 and legacy data
+ * alternate within one run and avoids misreading legacy 2-byte characters
+ * whose bytes happen to be valid UTF8.
+ *
+ * If at_eof is set, a trailing incomplete UTF8 sequence (or, when no such
+ * sequence was carried, a split DBCS lead) is left unconsumed; the number of
+ * such trailing bytes is returned so the caller can carry them over.
+ */
+static int decode_run(const unsigned char *s, int pos, int runend, UINT legacy,
+		wchar_t *wbuf, int wlen, int at_eof, int *wlen_out)
+{
+	uint32_t cp;
+	int i, leg, tail = -1, leftover = 0;
+
+	if (at_eof) {
+		tail = trailing_incomplete_utf8(s + pos, runend - pos);
+		if (tail >= 0) {
+			leftover = (runend - pos) - tail;
+			runend = pos + tail;
+		}
 	}
-	wbuf[0] = AUTODETECT_SUBST_W;
-	*nw = 1;
-	return 1;
+
+	/* fast path: the whole run is strictly valid UTF8 */
+	for (i = pos; i < runend; ) {
+		int r = next_utf8_seq(s + i, runend - i, &cp);
+		if (r <= 0)
+			break;
+		i += r;
+	}
+	if (i == runend) {
+		wlen = emit_utf8_wide(s + pos, runend - pos, wbuf, wlen);
+		*wlen_out = wlen;
+		return leftover;
+	}
+
+	/* mixed: alternate UTF8 and legacy-CP decoding */
+	i = pos;
+	leg = pos;
+	while (i < runend) {
+		int strong;
+		int j = utf8_stretch_len(s + i, runend - i, &strong);
+
+		if (j > 0 && strong) {
+			int consumed;
+			if (i > leg)
+				wlen = emit_legacy(legacy, s + leg, i - leg,
+						wbuf, wlen, &consumed, 0);
+			wlen = emit_utf8_wide(s + i, j, wbuf, wlen);
+			i += j;
+			leg = i;
+		} else {
+			i += legacy_unit_len(legacy, s + i, runend - i);
+		}
+	}
+	if (leg < runend) {
+		int consumed;
+		int allow = at_eof && leftover == 0;
+		wlen = emit_legacy(legacy, s + leg, runend - leg,
+				wbuf, wlen, &consumed, allow);
+		if (allow && consumed < runend - leg)
+			leftover = runend - leg - consumed;
+	}
+
+	*wlen_out = wlen;
+	return leftover;
 }
 
 // Write buf to the console (fd), auto-detecting UTF8 and legacy-CP data.
@@ -1826,61 +1971,27 @@ static int writeCon_autodetect(int fd, const char *msg, size_t siz)
 
 	pos = 0;
 	while (pos < n) {
-		uint32_t cp;
-		int stop, adv, nw, r;
+		int runend, leftover;
 
 		if (s[pos] < 0x80) {
 			wbuf[wlen++] = s[pos++];
 			continue;
 		}
 
-		/* non-ASCII run: prefer UTF8 */
-		stop = pos;
-		while (stop < n) {
-			r = next_utf8_seq(s + stop, n - stop, &cp);
-			if (r == 0)
-				break;
-			if (r < 0) {
-				/* valid but truncated prefix at end of buffer */
-				memcpy(pending_bytes, s + stop, n - stop);
-				npending = n - stop;
-				goto done;
-			}
-			if (cp < 0x10000) {
-				wbuf[wlen++] = cp;
-			} else {
-				cp -= 0x10000;
-				wbuf[wlen++] = 0xd800 | (cp >> 10);
-				wbuf[wlen++] = 0xdc00 | (cp & 0x3ff);
-			}
-			stop += r;
-		}
-		if (stop > pos) { /* UTF8 prefix decoded, resync after it */
-			pos = stop;
-			continue;
-		}
+		runend = pos;
+		while (runend < n && s[runend] >= 0x80)
+			runend++;
 
-		/* not UTF8: decode a legacy-CP run (bytes >= 0x80) */
-		do {
-			stop++;
-		} while (stop < n && s[stop] >= 0x80);
-		adv = decode_legacy_run(legacy, s + pos, stop - pos,
-				wbuf + wlen, &nw);
-		wlen += nw;
-		pos += adv;
-		if (pos < stop) {
-			/* a likely truncated DBCS lead was left over */
-			if (stop == n && stop - pos <= (int)sizeof(pending_bytes)) {
-				memcpy(pending_bytes, s + pos, stop - pos);
-				npending = stop - pos;
-				pos = stop;
-				break;  /* nothing but pending bytes left */
-			}
-			wbuf[wlen++] = AUTODETECT_SUBST_W;
-			pos = stop;
+		leftover = decode_run(s, pos, runend, legacy,
+				wbuf, wlen, runend == n, &wlen);
+		pos = runend;
+		if (leftover) {
+			memcpy(pending_bytes, s + runend - leftover, leftover);
+			npending = leftover;
+			break;
 		}
 	}
- done:
+
 	if (wlen && !WriteConsoleW(h, wbuf, wlen, &nwritten, 0)) {
 		free(work);
 		return -1;

@@ -506,10 +506,18 @@ config FEATURE_UTF8_AUTODETECT
 	encoding, and UTF8-aware child processes) with data encoded in a
 	legacy code page (e.g. the GBK/CP936 output of cmd, dir and other
 	programs that use the console codepage or the system ACP).
-	When enabled, each run of non-ASCII bytes is decoded as UTF8 if it
-	is valid UTF8 (strictly: overlong forms, surrogates and out-of-range
-	codepoints are rejected), otherwise it is decoded using the legacy
-	code page; the result is written with WriteConsoleW so Chinese and
+	When enabled, output is auto-detected run by run, where a run is a
+	maximal sequence of non-ASCII bytes.  A run that is strictly valid
+	UTF8 as a whole is decoded as UTF8; otherwise UTF8 and the legacy
+	code page are interleaved within the run: a stretch of valid UTF8
+	that contains a 3- or 4-byte sequence is decoded as UTF8, and
+	everything else is decoded with the legacy code page (UTF8
+	validation is strict: overlong forms, surrogates and out-of-range
+	codepoints are rejected).  This lets UTF8 and legacy data alternate
+	within one run and avoids misreading legacy two-byte characters
+	whose bytes happen to be valid UTF8.  An isolated run whose legacy
+	bytes are all valid UTF8 is inherently ambiguous and is read as
+	UTF8.  The result is written with WriteConsoleW so Chinese and
 	other multi-byte text displays correctly whichever encoder produced
 	it, with no lossy ACP->OEM recoding.
 	This takes precedence over FEATURE_UTF8_OUTPUT.
