@@ -7,7 +7,7 @@
 
 一套源码,两种目标平台:
 
-- **Windows**(主要目标,agent 运行环境):`make mingw64_defconfig` 交叉编译出 `busybox.exe`
+- **Windows**(主要目标,agent 运行环境):`make CROSS_COMPILE=x86_64-w64-mingw32- mingw64_defconfig` 交叉编译出 `busybox.exe`
 - **Linux/POSIX**(开发与验证环境):`make defconfig` 编译跨平台子集
 
 ---
@@ -28,11 +28,14 @@ Windows 版可用 wine 冒烟测试:`WINEDEBUG=-all wine build-win64/busybox.exe
 ```sh
 make mrproper                    # O= 外置构建要求源码树干净(仅此一次或每次改动源码树后)
 mkdir -p build-linux && make O=build-linux defconfig && make O=build-linux -j$(nproc)
-mkdir -p build-win64 && make O=build-win64 mingw64_defconfig && make O=build-win64 -j$(nproc)
+mkdir -p build-win64 && make O=build-win64 mingw64_defconfig && make O=build-win64 CROSS_COMPILE=x86_64-w64-mingw32- -j$(nproc)
 ```
 
 其他可用配置:`configs/` 下的 `mingw32_defconfig`(32 位)、`mingw32w_defconfig`(32 位 UTF-8)、
 `mingw64u_defconfig`(64 位 UTF-8)、`mingw64a_defconfig`。
+
+默认的 x86_64 Windows 配置面向无界面 agent：不包含 PE 图标/版本资源，也关闭可选的逐文件扩展元数据查询；
+在不减少 applet 集的前提下减小二进制，并避免常见文件操作的额外 Windows 元数据调用。
 
 ## 使用方法
 

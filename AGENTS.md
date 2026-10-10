@@ -31,7 +31,7 @@ Linux 构建保留,作为开发与验证环境(用 `make defconfig` 构建交叉
 
 ```sh
 mkdir -p build-linux && make O=build-linux defconfig && make O=build-linux -j$(nproc)
-mkdir -p build-win64 && make O=build-win64 mingw64_defconfig && make O=build-win64 -j$(nproc)
+mkdir -p build-win64 && make O=build-win64 mingw64_defconfig && make O=build-win64 CROSS_COMPILE=x86_64-w64-mingw32- -j$(nproc)
 ```
 
 产物:Linux 为 `build-linux/busybox`(~590KB、194 applet),Windows 为 `build-win64/busybox.exe`

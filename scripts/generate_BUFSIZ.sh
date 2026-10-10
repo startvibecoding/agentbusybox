@@ -13,8 +13,8 @@ test x"$1" = x"--post" && { postcompile=true; shift; }
 
 common_bufsiz_h=$1
 
-test x"$NM" = x"" && NM="${CONFIG_CROSS_COMPILER_PREFIX}nm"
-test x"$CC" = x"" && CC="${CONFIG_CROSS_COMPILER_PREFIX}gcc"
+test x"$NM" = x"" && NM="${CROSS_COMPILE}nm"
+test x"$CC" = x"" && CC="${CROSS_COMPILE}gcc"
 
 exitcmd="exit 0"
 

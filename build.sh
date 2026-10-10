@@ -39,7 +39,7 @@ if [ "$BUILD_WIN" = 1 ]; then
     echo "== building Windows (x86_64) version =="
     mkdir -p build-win64
     make O=build-win64 mingw64_defconfig
-    make O=build-win64 -j"$JOBS"
+    make O=build-win64 CROSS_COMPILE=x86_64-w64-mingw32- -j"$JOBS"
     echo "Windows binary: build-win64/busybox.exe"
 fi
 

@@ -380,7 +380,7 @@ config GLOBBING
 
 config FEATURE_RESOURCES
 	bool "Include resources in binary"
-	default y
+	default n
 	depends on PLATFORM_MINGW32
 	help
 	Microsoft Windows applications can contain non-executable resources
@@ -572,7 +572,7 @@ config FEATURE_IMPROVED_COLOUR_MAPPING
 
 config FEATURE_EXTRA_FILE_DATA
 	bool "Read additional file metadata (2.7 kb)"
-	default y
+	default n
 	depends on PLATFORM_MINGW32
 	help
 	Read additional file metadata: device id, inode number and number
@@ -644,31 +644,6 @@ config NOMMU
 	you may force NOMMU build here.
 
 	Most people will leave this set to 'N'.
-
-config CROSS_COMPILER_PREFIX
-	string "Cross compiler prefix"
-	default ""
-	help
-	If you want to build busybox with a cross compiler, then you
-	will need to set this to the cross-compiler prefix, for example,
-	"i386-uclibc-".
-
-	Note that CROSS_COMPILE environment variable or
-	"make CROSS_COMPILE=xxx ..." will override this selection.
-
-	Native builds leave this empty.
-
-config HOST_COMPILER
-	string "Host compiler"
-	default "gcc"
-	help
-	Name of the compiler to use for host binaries.
-
-config CROSS_COMPILER
-	string "Cross compiler"
-	default "gcc"
-	help
-	Name of the compiler to use for cross compilation.
 
 config SYSROOT
 	string "Path to sysroot"

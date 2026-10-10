@@ -81,20 +81,12 @@ export srctree objtree VPATH TOPDIR
 
 # Cross compiling and selecting different set of gcc/bin-utils
 # -------------------------------------------------------------
-# CROSS_COMPILE specifies the prefix used for all executables used
-# during compilation (only gcc and related bin-utils are prefixed).
-# Can be given on the command line or in the environment, otherwise
-# it is taken from CONFIG_CROSS_COMPILER_PREFIX in .config.
-
+# CROSS_COMPILE specifies the prefix used for target tools.  It is a build
+# environment property, not a BusyBox feature: pass it on the command line
+# or export it (for example, CROSS_COMPILE=x86_64-w64-mingw32-).  Keeping it
+# out of .config makes profiles portable between build hosts and prevents a
+# stale compiler path from being silently reused.
 CROSS_COMPILE ?=
-# bbox: we may have CONFIG_CROSS_COMPILER_PREFIX in .config,
-# and it has not been included yet... thus using an awkward syntax.
-ifeq ($(CROSS_COMPILE),)
-CROSS_COMPILE := $(shell grep ^CONFIG_CROSS_COMPILER_PREFIX .config 2>/dev/null)
-CROSS_COMPILE := $(subst CONFIG_CROSS_COMPILER_PREFIX=,,$(CROSS_COMPILE))
-CROSS_COMPILE := $(subst ",,$(CROSS_COMPILE))
-#")
-endif
 
 # ARCH selects the per-arch compiler tuning in arch/$(ARCH)/Makefile.
 # The only tunings we ship are i386 and x86_64; when cross compiling,
@@ -107,31 +99,6 @@ endif
 SUBARCH := $(shell echo $(SUBARCH) | sed -e s/i.86/i386/)
 
 ARCH ?= $(SUBARCH)
-
-# The compiler used to build the host helpers (kconfig, applet tables...).
-# On a MinGW/MSYS toolchain this is also what builds busybox.exe itself.
-HOST_COMPILER ?=
-ifeq ($(HOST_COMPILER),)
-HOST_COMPILER := $(shell grep ^CONFIG_HOST_COMPILER= .config 2>/dev/null)
-HOST_COMPILER := $(subst CONFIG_HOST_COMPILER=,,$(HOST_COMPILER))
-HOST_COMPILER := $(subst ",,$(HOST_COMPILER))
-#")
-endif
-ifeq ($(HOST_COMPILER),)
-HOST_COMPILER := gcc
-endif
-
-# The compiler used for the target (used together with $(CROSS_COMPILE)).
-CROSS_COMPILER ?=
-ifeq ($(CROSS_COMPILER),)
-CROSS_COMPILER := $(shell grep ^CONFIG_CROSS_COMPILER= .config 2>/dev/null)
-CROSS_COMPILER := $(subst CONFIG_CROSS_COMPILER=,,$(CROSS_COMPILER))
-CROSS_COMPILER := $(subst ",,$(CROSS_COMPILER))
-#")
-endif
-ifeq ($(CROSS_COMPILER),)
-CROSS_COMPILER := gcc
-endif
 
 # SHELL used by kbuild
 CONFIG_SHELL := $(shell if [ -x "$$BASH" ]; then echo $$BASH; \
@@ -193,7 +160,9 @@ export quiet Q KBUILD_VERBOSE
 # Look for make include files relative to root of src
 MAKEFLAGS += --include-dir=$(srctree)
 
-HOSTCC  	= $(HOST_COMPILER)
+# Host helpers always run on the build machine. HOSTCC and CC remain normal
+# make variables, so callers can override either one when needed.
+HOSTCC  	?= gcc
 HOSTCFLAGS	:=
 # We need some generic definitions
 include $(srctree)/scripts/Kbuild.include
@@ -207,7 +176,7 @@ MAKEFLAGS += -rR
 # Make variables (CC, etc...)
 
 AS	= $(CROSS_COMPILE)as
-CC	= $(CROSS_COMPILE)$(CROSS_COMPILER)
+CC	= $(CROSS_COMPILE)gcc
 LD	= $(CC) -nostdlib
 CPP	= $(CC) -E
 AR	= $(CROSS_COMPILE)ar
@@ -454,7 +423,7 @@ quiet_cmd_busybox__ ?= LINK    $@
       "$(libs-y)" \
       "$(LDLIBS)" \
       $(CONFIG_EXTRA_LDLIBS) \
-      && $(srctree)/scripts/generate_BUFSIZ.sh --post include/common_bufsiz.h
+      && NM="$(NM)" CC="$(CC)" $(srctree)/scripts/generate_BUFSIZ.sh --post include/common_bufsiz.h
 # ^^^ note: CONFIG_xyz strings already have double quotes: their value
 # is '"LIB LIB2"', therefore $(CONFIG_EXTRA_LDLIBS) above must NOT be written
 # as "$(CONFIG_EXTRA_LDLIBS)", it would be passed as ""LIB LIB2"",
@@ -522,7 +491,7 @@ prepare: prepare0
 quiet_cmd_gen_bbconfigopts = GEN     include/bbconfigopts.h
       cmd_gen_bbconfigopts = $(srctree)/scripts/mkconfigs include/bbconfigopts.h include/bbconfigopts_bz2.h
 quiet_cmd_gen_common_bufsiz = GEN     include/common_bufsiz.h
-      cmd_gen_common_bufsiz = $(srctree)/scripts/generate_BUFSIZ.sh include/common_bufsiz.h
+      cmd_gen_common_bufsiz = NM="$(NM)" CC="$(CC)" $(srctree)/scripts/generate_BUFSIZ.sh include/common_bufsiz.h
 quiet_cmd_split_autoconf   = SPLIT   include/autoconf.h -> include/config/*
       cmd_split_autoconf   = scripts/basic/split-include include/autoconf.h include/config
 quiet_cmd_gen_embedded_scripts = GEN     include/embedded_scripts.h

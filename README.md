@@ -8,7 +8,7 @@ keeping the **cross-platform toolset** plus the **Windows platform layer** (`win
 
 One source tree, two target platforms:
 
-- **Windows** (primary target, the agent runtime): `make mingw64_defconfig` cross-compiles `busybox.exe`
+- **Windows** (primary target, the agent runtime): `make CROSS_COMPILE=x86_64-w64-mingw32- mingw64_defconfig` cross-compiles `busybox.exe`
 - **Linux/POSIX** (development and verification environment): `make defconfig` builds the cross-platform subset
 
 ---
@@ -30,11 +30,16 @@ Manual steps:
 ```sh
 make mrproper                    # O= out-of-tree builds require a clean source tree
 mkdir -p build-linux && make O=build-linux defconfig && make O=build-linux -j$(nproc)
-mkdir -p build-win64 && make O=build-win64 mingw64_defconfig && make O=build-win64 -j$(nproc)
+mkdir -p build-win64 && make O=build-win64 mingw64_defconfig && make O=build-win64 CROSS_COMPILE=x86_64-w64-mingw32- -j$(nproc)
 ```
 
 Other configurations in `configs/`: `mingw32_defconfig` (32-bit), `mingw32w_defconfig` (32-bit UTF-8),
 `mingw64u_defconfig` (64-bit UTF-8), `mingw64a_defconfig`.
+
+The default x86_64 Windows profile is deliberately headless: it omits PE
+icons/version resources and the optional per-file metadata lookups. This
+keeps the agent binary smaller and avoids extra Windows metadata calls on
+common file operations without changing its applet set.
 
 ## Usage
 

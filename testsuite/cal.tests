@@ -23,7 +23,6 @@ test x"$CONFIG_LOCALE_SUPPORT" = x"y" \
 && test x"$CONFIG_LAST_SUPPORTED_WCHAR" = x"0" \
 && test x"$CONFIG_UNICODE_WIDE_WCHARS" = x"y" \
 && test x"$CONFIG_STATIC" != x"y" \
-&& test x"$CONFIG_CROSS_COMPILER_PREFIX" = x"" \
 && testing "unicode cal 2000" "LANG=zh_TW.utf8 cal 1 2000" "\
     一月 2000
 日 一 二 三 四 五 六

@@ -7,9 +7,9 @@ if ! test "$LIBC"; then
 	LIBC="uclibc"
 fi
 # x86 32-bit:
-#CROSS_COMPILER_PREFIX="i486-linux-uclibc-"
+#CROSS_COMPILE="i486-linux-uclibc-"
 # My system has strange prefix for x86 64-bit uclibc:
-#CROSS_COMPILER_PREFIX="x86_64-pc-linux-gnu-"
+#CROSS_COMPILE="x86_64-pc-linux-gnu-"
 
 if test $# -lt 2 || ! test -d "$1" || test -e "$2"; then
 	echo "Usage: $0 SRC_DIR TMP_DIR"
@@ -18,7 +18,7 @@ if test $# -lt 2 || ! test -d "$1" || test -e "$2"; then
 	echo "Then a random build will be performed."
 	echo
 	echo "Useful variables:"
-	echo "\$LIBC, \$CROSS_COMPILER_PREFIX, \$MAKEOPTS"
+	echo "\$LIBC, \$CROSS_COMPILE, \$MAKEOPTS"
 	exit 1
 fi
 
@@ -32,7 +32,6 @@ make randconfig >/dev/null || { echo "randconfig error"; exit 1; }
 cat .config \
 | grep -v CONFIG_DEBUG_PESSIMIZE \
 | grep -v CONFIG_WERROR \
-| grep -v CONFIG_CROSS_COMPILER_PREFIX \
 | grep -v CONFIG_SELINUX \
 | grep -v CONFIG_EFENCE \
 | grep -v CONFIG_DMALLOC \
@@ -42,7 +41,6 @@ cat .config \
 mv .config.new .config
 echo '# CONFIG_DEBUG_PESSIMIZE is not set' >>.config
 echo '# CONFIG_WERROR is not set' >>.config
-echo "CONFIG_CROSS_COMPILER_PREFIX=\"${CROSS_COMPILER_PREFIX}\"" >>.config
 echo '# CONFIG_SELINUX is not set' >>.config
 echo '# CONFIG_EFENCE is not set' >>.config
 echo '# CONFIG_DMALLOC is not set' >>.config
@@ -152,9 +150,9 @@ fi
 { yes "" | make oldconfig >/dev/null; } || { echo "oldconfig error"; exit 1; }
 
 # Build!
-nice -n 10 make $MAKEOPTS 2>&1 | tee make.log
+nice -n 10 make CROSS_COMPILE="${CROSS_COMPILE}" $MAKEOPTS 2>&1 | tee make.log
 grep 'Rerun make' make.log \
-&& nice -n 10 make $MAKEOPTS 2>&1 | tee -a make.log
+&& nice -n 10 make CROSS_COMPILE="${CROSS_COMPILE}" $MAKEOPTS 2>&1 | tee -a make.log
 
 # Return exitcode 1 if busybox executable does not exist
 test -x busybox

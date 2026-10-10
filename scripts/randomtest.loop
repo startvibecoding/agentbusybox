@@ -7,7 +7,7 @@ run_single_test=false
 run_single_test=true
 
 export LIBC="uclibc"
-export CROSS_COMPILER_PREFIX="i686-"
+export CROSS_COMPILE="i686-"
 export MAKEOPTS="-j9"
 
 test -d "$1" || { echo "'$1' is not a directory"; exit 1; }
